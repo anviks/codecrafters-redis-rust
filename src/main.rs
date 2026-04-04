@@ -121,7 +121,8 @@ async fn main() {
                                 if let RESPValue::Array(arr) = parsed {
                                     if let RESPValue::BulkString(cmd) = &arr[0] && let RESPValue::BulkString(value) = &arr[1] {
                                         if cmd.to_lowercase() == "echo" {
-                                            let mut output = "+".to_owned();
+                                            let mut output = "$".to_owned();
+                                            output.push_str(&value.len().to_string());
                                             output.push_str(value);
                                             output.push_str("\r\n");
 
