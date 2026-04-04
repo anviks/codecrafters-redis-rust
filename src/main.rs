@@ -106,6 +106,7 @@ async fn main() {
                                 println!("{:?}", parsed);
                                 if let RESPValue::Array(arr) = parsed {
                                     if let RESPValue::BulkString(cmd) = &arr[0]
+                                        && arr.len() > 1
                                         && let RESPValue::BulkString(value) = &arr[1]
                                     {
                                         if cmd.to_lowercase() == "echo" {
