@@ -111,6 +111,7 @@ async fn main() {
                                         if cmd.to_lowercase() == "echo" {
                                             let mut output = "$".to_owned();
                                             output.push_str(&value.len().to_string());
+                                            output.push_str("\r\n");
                                             output.push_str(value);
                                             output.push_str("\r\n");
 
