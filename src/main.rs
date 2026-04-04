@@ -15,74 +15,35 @@ enum RESPValue {
     Null,
 }
 
+fn read_until_crlf<'a>(input: &'a [u8], i: &mut usize) -> &'a [u8] {
+    let start = *i;
+    while input[*i] != b'\r' {
+        *i += 1;
+    }
+    let slice = &input[start..*i];
+    *i += 2; // skip \r\n
+    slice
+}
+
 fn parse_resp(input: &[u8], i: &mut usize) -> RESPValue {
     let type_byte = input[*i];
     *i += 1;
 
     return match type_byte {
-        b'+' => {
-            let mut str = vec![];
-            while (input[*i]) != b'\r' {
-                str.push(input[*i]);
-                *i += 1;
-            }
-            *i += 2; // skip \r\n
-            RESPValue::SimpleString(String::from_utf8(str).unwrap())
-        }
-        b'-' => {
-            let mut str = vec![];
-            while (input[*i]) != b'\r' {
-                str.push(input[*i]);
-                *i += 1;
-            }
-            *i += 2; // skip \r\n
-            RESPValue::Error(String::from_utf8(str).unwrap())
-        }
-        b':' => {
-            let mut int = vec![];
-            while (input[*i]) != b'\r' {
-                int.push(input[*i]);
-                *i += 1;
-            }
-            *i += 2; // skip \r\n
-            RESPValue::Integer(str::from_utf8(&int).unwrap().parse().unwrap())
-        }
+        b'+' => RESPValue::SimpleString(str::from_utf8(read_until_crlf(input, i)).unwrap().to_string()),
+        b'-' => RESPValue::Error(str::from_utf8(read_until_crlf(input, i)).unwrap().to_string()),
+        b':' => RESPValue::Integer(str::from_utf8(read_until_crlf(input, i)).unwrap().parse().unwrap()),
         b'$' => {
-            let mut len_bytes = vec![];
-            while input[*i] != b'\r' {
-                len_bytes.push(input[*i]);
-                *i += 1;
-            }
-            *i += 2; // skip \r\n
-            let count: i32 = str::from_utf8(&len_bytes).unwrap().parse().unwrap();
-            if count == -1 {
-                return RESPValue::Null;
-            }
-            let mut str = vec![];
-            for _ in 0..count {
-                str.push(input[*i]);
-                *i += 1;
-            }
-            *i += 2; // skip \r\n
-            RESPValue::BulkString(String::from_utf8(str).unwrap())
+            let count: i32 = str::from_utf8(read_until_crlf(input, i)).unwrap().parse().unwrap();
+            if count == -1 { return RESPValue::Null; }
+            let slice = &input[*i..*i + count as usize];
+            *i += count as usize + 2;
+            RESPValue::BulkString(str::from_utf8(slice).unwrap().to_string())
         }
         b'*' => {
-            let mut len_bytes = vec![];
-            while input[*i] != b'\r' {
-                len_bytes.push(input[*i]);
-                *i += 1;
-            }
-            *i += 2; // skip \r\n
-            let count: i32 = str::from_utf8(&len_bytes).unwrap().parse().unwrap();
-            if count == -1 {
-                return RESPValue::Null;
-            }
-            let mut items = vec![];
-            for _ in 0..count {
-                items.push(parse_resp(input, i));
-            }
-            *i += 2; // skip \r\n
-            RESPValue::Array(items)
+            let count: i32 = str::from_utf8(read_until_crlf(input, i)).unwrap().parse().unwrap();
+            if count == -1 { return RESPValue::Null; }
+            RESPValue::Array((0..count).map(|_| parse_resp(input, i)).collect())
         }
         _ => panic!("unexpected byte: {}", type_byte),
     };
