@@ -12,7 +12,7 @@ fn main() {
                 let mut buf = [0; 512];
                 match stream.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(_) => stream.write_all(b"+PUNG\r\n").unwrap(),
+                    Ok(_) => stream.write_all(b"+PONG\r\n").unwrap(),
                     Err(_) => break,
                 }
             },
