@@ -85,21 +85,7 @@ fn parse_resp(input: &[u8], i: &mut usize) -> RESPValue {
             RESPValue::Array(items)
         }
         _ => panic!("unexpected byte: {}", type_byte),
-    }
-
-    // while i < input.len() {
-    //     if byte == b':' {}
-    //     if byte == b'*' {
-    //         result.push(RESPValue::Array(vec![]));
-    //     }
-
-    //     i += 1;
-    // }
-
-    // println!("{:?}", String::from_utf8_lossy(&input));
-    // println!("{:?}", &input);
-
-    // return vec![];
+    };
 }
 
 #[tokio::main]
@@ -119,16 +105,22 @@ async fn main() {
                                 let parsed = parse_resp(&buf, &mut i);
                                 println!("{:?}", parsed);
                                 if let RESPValue::Array(arr) = parsed {
-                                    if let RESPValue::BulkString(cmd) = &arr[0] && let RESPValue::BulkString(value) = &arr[1] {
+                                    if let RESPValue::BulkString(cmd) = &arr[0]
+                                        && let RESPValue::BulkString(value) = &arr[1]
+                                    {
                                         if cmd.to_lowercase() == "echo" {
                                             let mut output = "$".to_owned();
                                             output.push_str(&value.len().to_string());
                                             output.push_str(value);
                                             output.push_str("\r\n");
 
-                                            if let Err(_) = stream.write_all(output.as_bytes()).await {
+                                            if let Err(_) =
+                                                stream.write_all(output.as_bytes()).await
+                                            {
                                                 break;
                                             }
+
+                                            continue;
                                         }
                                     }
                                 }
