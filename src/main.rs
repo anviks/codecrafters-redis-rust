@@ -1,7 +1,22 @@
+use std::char::from_digit;
+
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
+
+enum RESPValue {
+    String(String),
+    Number(i32),
+    Array(Vec<RESPValue>),
+}
+
+fn parse_resp(input: &[u8]) -> Vec<RESPValue> {
+    let result: Vec<RESPValue> = vec![];
+    println!("{:?}", String::from_utf8_lossy(&input));
+
+    return vec![];
+}
 
 #[tokio::main]
 async fn main() {
@@ -16,6 +31,7 @@ async fn main() {
                         match stream.read(&mut buf).await {
                             Ok(0) => break,
                             Ok(_) => {
+                                parse_resp(&buf);
                                 if let Err(_) = stream.write_all(b"+PONG\r\n").await {
                                     break;
                                 }
