@@ -24,6 +24,21 @@ fn as_str(v: &RESPValue) -> Option<&str> {
     }
 }
 
+fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
+    if args.len() > 1
+        && let Some(str) = as_str(&args[0])
+        && let Some(int) = as_str(&args[1])
+    {
+        match str.to_lowercase().as_str() {
+            "ex" => Some(Instant::now().add(Duration::from_secs(int.parse().unwrap()))),
+            "px" => Some(Instant::now().add(Duration::from_millis(int.parse().unwrap()))),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let store: Arc<Mutex<HashMap<RESPValue, Value>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -44,71 +59,40 @@ async fn main() {
 
                                 if let RESPValue::Array(array) = parsed
                                     && let Some(arr) = array
-                                    && arr.len() > 1
+                                    && !arr.is_empty()
                                     && let Some(cmd) = as_str(&arr[0])
                                 {
                                     let response = match cmd.to_lowercase().as_str() {
                                         "ping" => RESPValue::SimpleString("PONG".to_string()),
-                                        "echo" => arr[1].clone(),
-                                        "get" => {
+                                        "echo" if arr.len() > 1 => arr[1].clone(),
+                                        "get" if arr.len() > 1 => {
                                             let key = &arr[1];
-                                            let value = {
-                                                let mut lock = loc_store.lock().unwrap();
-
-                                                match lock.get(key) {
-                                                    Some(val)
-                                                        if val
-                                                            .expires_at
-                                                            .map_or(false, |inst| {
-                                                                Instant::now() >= inst
-                                                            }) =>
-                                                    {
-                                                        lock.remove(key);
-                                                        RESPValue::BulkString(None)
-                                                    }
-                                                    Some(val) => val.value.clone(),
-                                                    None => RESPValue::BulkString(None),
-                                                }
-                                            };
-                                            value
-                                        }
-                                        "set" => {
-                                            let key = arr[1].clone();
-                                            let value = {
-                                                let val = arr[2].clone();
-
-                                                let expiry = if arr.len() > 4
-                                                    && let Some(str) = as_str(&arr[3])
-                                                    && let Some(int) = as_str(&arr[4])
+                                            let mut lock = loc_store.lock().unwrap();
+                                            match lock.get(key) {
+                                                Some(val)
+                                                    if val.expires_at.map_or(false, |inst| {
+                                                        Instant::now() >= inst
+                                                    }) =>
                                                 {
-                                                    match str.to_lowercase().as_str() {
-                                                        "ex" => Some(Instant::now().add(
-                                                            Duration::from_secs(
-                                                                int.parse().unwrap(),
-                                                            ),
-                                                        )),
-                                                        "px" => Some(Instant::now().add(
-                                                            Duration::from_millis(
-                                                                int.parse().unwrap(),
-                                                            ),
-                                                        )),
-                                                        _ => None,
-                                                    }
-                                                } else {
-                                                    None
-                                                };
-
-                                                Value {
-                                                    value: val,
-                                                    expires_at: expiry,
+                                                    lock.remove(key);
+                                                    RESPValue::BulkString(None)
                                                 }
+                                                Some(val) => val.value.clone(),
+                                                None => RESPValue::BulkString(None),
+                                            }
+                                        }
+                                        "set" if arr.len() > 2 => {
+                                            let key = arr[1].clone();
+                                            let value = Value {
+                                                value: arr[2].clone(),
+                                                expires_at: parse_expiry(&arr[3..]),
                                             };
 
                                             loc_store.lock().unwrap().insert(key, value);
                                             RESPValue::SimpleString("OK".to_string())
                                         }
                                         _ => RESPValue::SimpleError(format!(
-                                            "ERR unknown comand '{}'",
+                                            "ERR unknown command '{}' (or insufficient arguments)",
                                             cmd
                                         )),
                                     };
@@ -118,8 +102,6 @@ async fn main() {
                                     if stream.write_all(&output).await.is_err() {
                                         break;
                                     }
-
-                                    continue;
                                 }
                             }
                             Err(_) => break,
