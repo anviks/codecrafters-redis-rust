@@ -119,6 +119,29 @@ async fn main() {
 
                                             RESPValue::Integer(vec_len as i64)
                                         }
+                                        "lpush" if arr.len() > 2 => {
+                                            let key = arr[1].clone();
+                                            let mut lock = loc_store.lock().unwrap();
+
+                                            let vec = match lock.remove(&key) {
+                                                Some(val) => as_vec(val.value).unwrap(),
+                                                None => vec![],
+                                            };
+                                            let mut vec2 = arr[2..].to_vec();
+                                            vec2.reverse();
+                                            vec2.extend(vec);
+                                            let vec_len = vec2.len();
+
+                                            lock.insert(
+                                                key,
+                                                Value {
+                                                    value: RESPValue::Array(Some(vec2)),
+                                                    expires_at: None,
+                                                },
+                                            );
+
+                                            RESPValue::Integer(vec_len as i64)
+                                        }
                                         "lrange" if arr.len() > 3 => {
                                             let key = arr[1].clone();
                                             let lock = loc_store.lock().unwrap();
