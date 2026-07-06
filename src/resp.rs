@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RESPValue {
     SimpleString(String),
     SimpleError(String),
@@ -9,6 +9,14 @@ pub(crate) enum RESPValue {
     Boolean(bool),
     Double(f64),
 }
+
+impl std::hash::Hash for RESPValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+    }
+}
+
+impl Eq for RESPValue {}
 
 fn read_until_crlf<'a>(input: &'a [u8], i: &mut usize) -> &'a [u8] {
     let start = *i;
@@ -80,6 +88,27 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
         ),
         _ => panic!("Unexpected byte: {}", type_byte),
     };
+}
+
+pub fn encode(input: &RESPValue) -> Vec<u8> {
+    match input {
+        RESPValue::SimpleString(str) => format!("+{}\r\n", str).bytes().collect(),
+        RESPValue::SimpleError(err) => format!("-{}\r\n", err).bytes().collect(),
+        RESPValue::Integer(int) => format!(":{int}\r\n").bytes().collect(),
+        RESPValue::BulkString(str) => format!("${}\r\n{}\r\n", str.len(), str).bytes().collect(),
+        RESPValue::Array(respvalues) => {
+            let mut result = format!("*{}\r\n", respvalues.len()).as_bytes().to_vec();
+            for val in respvalues {
+                result.extend(encode(val));
+            }
+            result
+        }
+        RESPValue::Null => "_\r\n".bytes().collect(),
+        RESPValue::Boolean(bool) => format!("#{}\r\n", bool.to_string().chars().nth(0).unwrap())
+            .bytes()
+            .collect(),
+        RESPValue::Double(_) => todo!(),
+    }
 }
 
 pub fn decode(input: &[u8]) -> RESPValue {
