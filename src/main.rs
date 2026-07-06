@@ -34,8 +34,11 @@ async fn main() {
                             Ok(_) => {
                                 let parsed = decode(&buf);
                                 println!("{:?}", parsed);
-                                if let RESPValue::Array(arr) = parsed {
-                                    if let RESPValue::BulkString(cmd) = &arr[0]
+                                if let RESPValue::Array(array) = parsed
+                                    && let Some(arr) = array
+                                {
+                                    if let RESPValue::BulkString(command) = &arr[0]
+                                        && let Some(cmd) = command
                                         && arr.len() > 1
                                         && let RESPValue::BulkString(value) = &arr[1]
                                     {
@@ -63,10 +66,10 @@ async fn main() {
                                                                 }) =>
                                                         {
                                                             lock.remove(key);
-                                                            RESPValue::Null
+                                                            RESPValue::BulkString(None)
                                                         }
                                                         Some(val) => val.value.clone(),
-                                                        None => RESPValue::Null,
+                                                        None => RESPValue::BulkString(None),
                                                     }
                                                 };
                                                 let output = encode(&value);
@@ -83,18 +86,20 @@ async fn main() {
                                                     let val = arr[2].clone();
 
                                                     let expiry = if arr.len() > 4
-                                                        && let RESPValue::BulkString(s) = &arr[3]
+                                                        && let RESPValue::BulkString(str) = &arr[3]
+                                                        && let Some(s) = str
                                                         && let RESPValue::BulkString(int) = &arr[4]
+                                                        && let Some(i) = int
                                                     {
                                                         match s.to_lowercase().as_str() {
                                                             "ex" => Some(Instant::now().add(
                                                                 Duration::from_secs(
-                                                                    int.parse().unwrap(),
+                                                                    i.parse().unwrap(),
                                                                 ),
                                                             )),
                                                             "px" => Some(Instant::now().add(
                                                                 Duration::from_millis(
-                                                                    int.parse().unwrap(),
+                                                                    i.parse().unwrap(),
                                                                 ),
                                                             )),
                                                             _ => None,

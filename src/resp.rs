@@ -3,11 +3,11 @@ pub(crate) enum RESPValue {
     SimpleString(String),
     SimpleError(String),
     Integer(i64),
-    BulkString(String),
-    Array(Vec<RESPValue>),
-    Null,
-    Boolean(bool),
-    Double(f64),
+    BulkString(Option<String>),
+    Array(Option<Vec<RESPValue>>),
+    // Null,
+    // Boolean(bool),
+    // Double(f64),
 }
 
 impl std::hash::Hash for RESPValue {
@@ -55,11 +55,11 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
                 .parse()
                 .unwrap();
             if count == -1 {
-                return RESPValue::Null;
+                return RESPValue::BulkString(None);
             }
             let slice = &input[*i..*i + count as usize];
             *i += count as usize + 2;
-            RESPValue::BulkString(str::from_utf8(slice).unwrap().to_string())
+            RESPValue::BulkString(Some(str::from_utf8(slice).unwrap().to_string()))
         }
         b'*' => {
             let count: i32 = str::from_utf8(read_until_crlf(input, i))
@@ -67,25 +67,25 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
                 .parse()
                 .unwrap();
             if count == -1 {
-                return RESPValue::Null;
+                return RESPValue::Array(None);
             }
-            RESPValue::Array((0..count).map(|_| decode_value(input, i)).collect())
+            RESPValue::Array(Some((0..count).map(|_| decode_value(input, i)).collect()))
         }
-        b'_' => {
-            read_until_crlf(input, i);
-            RESPValue::Null
-        }
-        b'#' => match read_until_crlf(input, i) {
-            [b't'] => RESPValue::Boolean(true),
-            [b'f'] => RESPValue::Boolean(false),
-            b => panic!("Invalid boolean byte sequence: {:?}", b),
-        },
-        b',' => RESPValue::Double(
-            str::from_utf8(read_until_crlf(input, i))
-                .unwrap()
-                .parse()
-                .unwrap(),
-        ),
+        // b'_' => {
+        //     read_until_crlf(input, i);
+        //     RESPValue::Null
+        // }
+        // b'#' => match read_until_crlf(input, i) {
+        //     [b't'] => RESPValue::Boolean(true),
+        //     [b'f'] => RESPValue::Boolean(false),
+        //     b => panic!("Invalid boolean byte sequence: {:?}", b),
+        // },
+        // b',' => RESPValue::Double(
+        //     str::from_utf8(read_until_crlf(input, i))
+        //         .unwrap()
+        //         .parse()
+        //         .unwrap(),
+        // ),
         _ => panic!("Unexpected byte: {}", type_byte),
     };
 }
@@ -95,19 +95,24 @@ pub fn encode(input: &RESPValue) -> Vec<u8> {
         RESPValue::SimpleString(str) => format!("+{}\r\n", str).bytes().collect(),
         RESPValue::SimpleError(err) => format!("-{}\r\n", err).bytes().collect(),
         RESPValue::Integer(int) => format!(":{int}\r\n").bytes().collect(),
-        RESPValue::BulkString(str) => format!("${}\r\n{}\r\n", str.len(), str).bytes().collect(),
-        RESPValue::Array(respvalues) => {
-            let mut result = format!("*{}\r\n", respvalues.len()).as_bytes().to_vec();
-            for val in respvalues {
-                result.extend(encode(val));
+        RESPValue::BulkString(str) => match str {
+            Some(s) => format!("${}\r\n{}\r\n", s.len(), s).bytes().collect(),
+            None => "$-1\r\n".bytes().collect(),
+        },
+        RESPValue::Array(respvalues) => match respvalues {
+            Some(vals) => {
+                let mut result = format!("*{}\r\n", vals.len()).as_bytes().to_vec();
+                for val in vals {
+                    result.extend(encode(val));
+                }
+                result
             }
-            result
-        }
-        RESPValue::Null => "_\r\n".bytes().collect(),
-        RESPValue::Boolean(bool) => format!("#{}\r\n", bool.to_string().chars().nth(0).unwrap())
-            .bytes()
-            .collect(),
-        RESPValue::Double(_) => todo!(),
+            None => "*-1\r\n".bytes().collect(),
+        }, // RESPValue::Null => "_\r\n".bytes().collect(),
+           // RESPValue::Boolean(bool) => format!("#{}\r\n", bool.to_string().chars().nth(0).unwrap())
+           //     .bytes()
+           //     .collect(),
+           // RESPValue::Double(_) => todo!(),
     }
 }
 
