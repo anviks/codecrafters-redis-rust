@@ -40,18 +40,9 @@ async fn main() {
                                     if let RESPValue::BulkString(command) = &arr[0]
                                         && let Some(cmd) = command
                                         && arr.len() > 1
-                                        && let RESPValue::BulkString(value) = &arr[1]
                                     {
-                                        match cmd.to_lowercase().as_str() {
-                                            "echo" => {
-                                                let output = encode(&arr[1]);
-
-                                                if let Err(_) = stream.write_all(&output).await {
-                                                    break;
-                                                }
-
-                                                continue;
-                                            }
+                                        let response = match cmd.to_lowercase().as_str() {
+                                            "echo" => arr[1].clone(),
                                             "get" => {
                                                 let key = &arr[1];
                                                 let value = {
@@ -72,13 +63,7 @@ async fn main() {
                                                         None => RESPValue::BulkString(None),
                                                     }
                                                 };
-                                                let output = encode(&value);
-
-                                                if let Err(_) = stream.write_all(&output).await {
-                                                    break;
-                                                }
-
-                                                continue;
+                                                value
                                             }
                                             "set" => {
                                                 let key = arr[1].clone();
@@ -115,18 +100,21 @@ async fn main() {
                                                 };
 
                                                 loc_store.lock().unwrap().insert(key, value);
-                                                let output = encode(&RESPValue::SimpleString(
-                                                    "OK".to_string(),
-                                                ));
-
-                                                if let Err(_) = stream.write_all(&output).await {
-                                                    break;
-                                                }
-
-                                                continue;
+                                                RESPValue::SimpleString("OK".to_string())
                                             }
-                                            _ => {}
+                                            _ => RESPValue::SimpleError(format!(
+                                                "ERR unknown comand '{}'",
+                                                cmd
+                                            )),
+                                        };
+
+                                        let output = encode(&response);
+
+                                        if let Err(_) = stream.write_all(&output).await {
+                                            break;
                                         }
+
+                                        continue;
                                     }
                                 }
                                 if let Err(_) = stream.write_all(b"+PONG\r\n").await {
