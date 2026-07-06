@@ -92,12 +92,12 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
 
 pub fn encode(input: &RESPValue) -> Vec<u8> {
     match input {
-        RESPValue::SimpleString(str) => format!("+{}\r\n", str).bytes().collect(),
-        RESPValue::SimpleError(err) => format!("-{}\r\n", err).bytes().collect(),
+        RESPValue::SimpleString(str) => format!("+{str}\r\n").bytes().collect(),
+        RESPValue::SimpleError(err) => format!("-{err}\r\n").bytes().collect(),
         RESPValue::Integer(int) => format!(":{int}\r\n").bytes().collect(),
         RESPValue::BulkString(str) => match str {
             Some(s) => format!("${}\r\n{}\r\n", s.len(), s).bytes().collect(),
-            None => "$-1\r\n".bytes().collect(),
+            None => b"$-1\r\n".to_vec(),
         },
         RESPValue::Array(respvalues) => match respvalues {
             Some(vals) => {
@@ -107,7 +107,7 @@ pub fn encode(input: &RESPValue) -> Vec<u8> {
                 }
                 result
             }
-            None => "*-1\r\n".bytes().collect(),
+            None => b"*-1\r\n".to_vec(),
         }, // RESPValue::Null => "_\r\n".bytes().collect(),
            // RESPValue::Boolean(bool) => format!("#{}\r\n", bool.to_string().chars().nth(0).unwrap())
            //     .bytes()

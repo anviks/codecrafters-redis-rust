@@ -34,6 +34,7 @@ async fn main() {
                             Ok(_) => {
                                 let parsed = decode(&buf);
                                 println!("{:?}", parsed);
+
                                 if let RESPValue::Array(array) = parsed
                                     && let Some(arr) = array
                                 {
@@ -42,6 +43,7 @@ async fn main() {
                                         && arr.len() > 1
                                     {
                                         let response = match cmd.to_lowercase().as_str() {
+                                            "ping" => RESPValue::SimpleString("PONG".to_string()),
                                             "echo" => arr[1].clone(),
                                             "get" => {
                                                 let key = &arr[1];
@@ -110,15 +112,12 @@ async fn main() {
 
                                         let output = encode(&response);
 
-                                        if let Err(_) = stream.write_all(&output).await {
+                                        if stream.write_all(&output).await.is_err() {
                                             break;
                                         }
 
                                         continue;
                                     }
-                                }
-                                if let Err(_) = stream.write_all(b"+PONG\r\n").await {
-                                    break;
                                 }
                             }
                             Err(_) => break,
