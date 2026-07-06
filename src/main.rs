@@ -142,6 +142,17 @@ async fn main() {
 
                                             RESPValue::Integer(vec_len as i64)
                                         }
+                                        "llen" if arr.len() > 1 => {
+                                            let key = arr[1].clone();
+                                            let lock = loc_store.lock().unwrap();
+
+                                            let vec_len = match lock.get(&key) {
+                                                Some(val) => as_vec(val.value.clone()).unwrap().len(),
+                                                None => 0,
+                                            };
+
+                                            RESPValue::Integer(vec_len as i64)
+                                        }
                                         "lrange" if arr.len() > 3 => {
                                             let key = arr[1].clone();
                                             let lock = loc_store.lock().unwrap();
