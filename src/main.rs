@@ -17,6 +17,13 @@ struct Value {
     expires_at: Option<Instant>,
 }
 
+fn as_str(v: &RESPValue) -> Option<&str> {
+    match v {
+        RESPValue::BulkString(Some(s)) => Some(s),
+        _ => None,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let store: Arc<Mutex<HashMap<RESPValue, Value>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -38,8 +45,7 @@ async fn main() {
                                 if let RESPValue::Array(array) = parsed
                                     && let Some(arr) = array
                                 {
-                                    if let RESPValue::BulkString(command) = &arr[0]
-                                        && let Some(cmd) = command
+                                    if let Some(cmd) = as_str(&arr[0])
                                         && arr.len() > 1
                                     {
                                         let response = match cmd.to_lowercase().as_str() {
@@ -73,20 +79,18 @@ async fn main() {
                                                     let val = arr[2].clone();
 
                                                     let expiry = if arr.len() > 4
-                                                        && let RESPValue::BulkString(str) = &arr[3]
-                                                        && let Some(s) = str
-                                                        && let RESPValue::BulkString(int) = &arr[4]
-                                                        && let Some(i) = int
+                                                        && let Some(str) = as_str(&arr[3])
+                                                        && let Some(int) = as_str(&arr[4])
                                                     {
-                                                        match s.to_lowercase().as_str() {
+                                                        match str.to_lowercase().as_str() {
                                                             "ex" => Some(Instant::now().add(
                                                                 Duration::from_secs(
-                                                                    i.parse().unwrap(),
+                                                                    int.parse().unwrap(),
                                                                 ),
                                                             )),
                                                             "px" => Some(Instant::now().add(
                                                                 Duration::from_millis(
-                                                                    i.parse().unwrap(),
+                                                                    int.parse().unwrap(),
                                                                 ),
                                                             )),
                                                             _ => None,
