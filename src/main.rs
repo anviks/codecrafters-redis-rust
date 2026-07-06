@@ -60,8 +60,8 @@ async fn main() {
                         let mut buf = [0; 512];
                         match stream.read(&mut buf).await {
                             Ok(0) => break,
-                            Ok(_) => {
-                                let parsed = decode(&buf);
+                            Ok(n) => {
+                                let parsed = decode(&buf[..n]);
                                 println!("{:?}", parsed);
 
                                 if let RESPValue::Array(array) = parsed
@@ -118,6 +118,29 @@ async fn main() {
                                             );
 
                                             RESPValue::Integer(vec_len as i64)
+                                        }
+                                        "lrange" if arr.len() > 3 => {
+                                            let key = arr[1].clone();
+                                            let lock = loc_store.lock().unwrap();
+                                            match lock.get(&key) {
+                                                Some(val) => {
+                                                    let vec = as_vec(val.value.clone()).unwrap();
+
+                                                    let start: usize =
+                                                        as_str(&arr[2]).unwrap().parse().unwrap();
+                                                    let stop: usize =
+                                                        as_str(&arr[3]).unwrap().parse::<usize>().unwrap().min(vec.len() - 1);
+
+                                                    if start > stop || start >= vec.len() {
+                                                        RESPValue::Array(Some(vec![]))
+                                                    } else {
+                                                        RESPValue::Array(Some(
+                                                            vec[start..=stop].to_vec(),
+                                                        ))
+                                                    }
+                                                }
+                                                None => RESPValue::Array(Some(vec![])),
+                                            }
                                         }
                                         _ => RESPValue::SimpleError(format!(
                                             "ERR unknown command '{}' (or insufficient arguments)",
