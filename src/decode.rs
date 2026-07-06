@@ -2,10 +2,12 @@
 pub(crate) enum RESPValue {
     SimpleString(String),
     SimpleError(String),
-    Integer(i32),
+    Integer(i64),
     BulkString(String),
     Array(Vec<RESPValue>),
     Null,
+    Boolean(bool),
+    Double(f64),
 }
 
 fn read_until_crlf<'a>(input: &'a [u8], i: &mut usize) -> &'a [u8] {
@@ -61,7 +63,22 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
             }
             RESPValue::Array((0..count).map(|_| decode_value(input, i)).collect())
         }
-        _ => panic!("unexpected byte: {}", type_byte),
+        b'_' => {
+            read_until_crlf(input, i);
+            RESPValue::Null
+        }
+        b'#' => match read_until_crlf(input, i) {
+            [b't'] => RESPValue::Boolean(true),
+            [b'f'] => RESPValue::Boolean(false),
+            b => panic!("Invalid boolean byte sequence: {:?}", b),
+        },
+        b',' => RESPValue::Double(
+            str::from_utf8(read_until_crlf(input, i))
+                .unwrap()
+                .parse()
+                .unwrap(),
+        ),
+        _ => panic!("Unexpected byte: {}", type_byte),
     };
 }
 
