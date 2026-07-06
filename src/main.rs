@@ -1,7 +1,9 @@
 use crate::resp::{RESPValue, decode, encode};
 use std::{
     collections::HashMap,
+    ops::Add,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -9,9 +11,15 @@ use tokio::{
 };
 mod resp;
 
+#[derive(Clone, Debug)]
+struct Value {
+    value: RESPValue,
+    expires_at: Option<Instant>,
+}
+
 #[tokio::main]
 async fn main() {
-    let store: Arc<Mutex<HashMap<RESPValue, RESPValue>>> = Arc::new(Mutex::new(HashMap::new()));
+    let store: Arc<Mutex<HashMap<RESPValue, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
     loop {
@@ -44,10 +52,22 @@ async fn main() {
                                             "get" => {
                                                 let key = &arr[1];
                                                 let value = {
-                                                    let lock = loc_store.lock().unwrap();
-                                                    lock.get(key)
-                                                        .cloned()
-                                                        .unwrap_or(RESPValue::Null)
+                                                    let mut lock = loc_store.lock().unwrap();
+
+                                                    match lock.get(key) {
+                                                        Some(val)
+                                                            if val
+                                                                .expires_at
+                                                                .map_or(false, |inst| {
+                                                                    Instant::now() >= inst
+                                                                }) =>
+                                                        {
+                                                            lock.remove(key);
+                                                            RESPValue::Null
+                                                        }
+                                                        Some(val) => val.value.clone(),
+                                                        None => RESPValue::Null,
+                                                    }
                                                 };
                                                 let output = encode(&value);
 
@@ -59,7 +79,36 @@ async fn main() {
                                             }
                                             "set" => {
                                                 let key = arr[1].clone();
-                                                let value = arr[2].clone();
+                                                let value = {
+                                                    let val = arr[2].clone();
+
+                                                    let expiry = if arr.len() > 4
+                                                        && let RESPValue::BulkString(s) = &arr[3]
+                                                        && let RESPValue::BulkString(int) = &arr[4]
+                                                    {
+                                                        match s.to_lowercase().as_str() {
+                                                            "ex" => Some(Instant::now().add(
+                                                                Duration::from_secs(
+                                                                    int.parse().unwrap(),
+                                                                ),
+                                                            )),
+                                                            "px" => Some(Instant::now().add(
+                                                                Duration::from_millis(
+                                                                    int.parse().unwrap(),
+                                                                ),
+                                                            )),
+                                                            _ => None,
+                                                        }
+                                                    } else {
+                                                        None
+                                                    };
+
+                                                    Value {
+                                                        value: val,
+                                                        expires_at: expiry,
+                                                    }
+                                                };
+
                                                 loc_store.lock().unwrap().insert(key, value);
                                                 let output = encode(&RESPValue::SimpleString(
                                                     "OK".to_string(),
