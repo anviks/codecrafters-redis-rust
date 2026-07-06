@@ -24,6 +24,13 @@ fn as_str(v: &RESPValue) -> Option<&str> {
     }
 }
 
+fn as_vec(v: RESPValue) -> Option<Vec<RESPValue>> {
+    match v {
+        RESPValue::Array(Some(vec)) => Some(vec),
+        _ => None,
+    }
+}
+
 fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
     if args.len() > 1
         && let Some(str) = as_str(&args[0])
@@ -90,6 +97,27 @@ async fn main() {
 
                                             loc_store.lock().unwrap().insert(key, value);
                                             RESPValue::SimpleString("OK".to_string())
+                                        }
+                                        "rpush" if arr.len() > 2 => {
+                                            let key = arr[1].clone();
+                                            let mut lock = loc_store.lock().unwrap();
+
+                                            let mut vec = match lock.remove(&key) {
+                                                Some(val) => as_vec(val.value).unwrap(),
+                                                None => vec![],
+                                            };
+                                            vec.extend_from_slice(&arr[2..]);
+                                            let vec_len = vec.len();
+
+                                            lock.insert(
+                                                key,
+                                                Value {
+                                                    value: RESPValue::Array(Some(vec)),
+                                                    expires_at: None,
+                                                },
+                                            );
+
+                                            RESPValue::Integer(vec_len as i64)
                                         }
                                         _ => RESPValue::SimpleError(format!(
                                             "ERR unknown command '{}' (or insufficient arguments)",
