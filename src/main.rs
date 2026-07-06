@@ -126,10 +126,32 @@ async fn main() {
                                                 Some(val) => {
                                                     let vec = as_vec(val.value.clone()).unwrap();
 
-                                                    let start: usize =
-                                                        as_str(&arr[2]).unwrap().parse().unwrap();
-                                                    let stop: usize =
-                                                        as_str(&arr[3]).unwrap().parse::<usize>().unwrap().min(vec.len() - 1);
+                                                    let start: usize = {
+                                                        let s: i64 = as_str(&arr[2])
+                                                            .unwrap()
+                                                            .parse()
+                                                            .unwrap();
+
+                                                        if s < 0 {
+                                                            (vec.len() as i64 + s).max(0) as usize
+                                                        } else {
+                                                            s as usize
+                                                        }
+                                                    };
+
+                                                    let stop: usize = {
+                                                        let s = as_str(&arr[3])
+                                                            .unwrap()
+                                                            .parse::<i64>()
+                                                            .unwrap()
+                                                            .min((vec.len() - 1) as i64);
+
+                                                        if s < 0 {
+                                                            (vec.len() as i64 + s).max(0) as usize
+                                                        } else {
+                                                            s as usize
+                                                        }
+                                                    };
 
                                                     if start > stop || start >= vec.len() {
                                                         RESPValue::Array(Some(vec![]))
