@@ -17,31 +17,10 @@ struct Value {
     expires_at: Option<Instant>,
 }
 
-fn as_str(v: &RESPValue) -> Option<&str> {
-    match v {
-        RESPValue::BulkString(Some(s)) => Some(s),
-        _ => None,
-    }
-}
-
-fn as_vec(v: &RESPValue) -> Option<&Vec<RESPValue>> {
-    match v {
-        RESPValue::Array(Some(vec)) => Some(vec),
-        _ => None,
-    }
-}
-
-fn as_vec_mut(v: &mut RESPValue) -> Option<&mut Vec<RESPValue>> {
-    match v {
-        RESPValue::Array(Some(vec)) => Some(vec),
-        _ => None,
-    }
-}
-
 fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
     if args.len() > 1
-        && let Some(str) = as_str(&args[0])
-        && let Some(int) = as_str(&args[1])
+        && let Some(str) = args[0].as_str()
+        && let Some(int) = args[1].as_str()
     {
         match str.to_lowercase().as_str() {
             "ex" => Some(Instant::now().add(Duration::from_secs(int.parse().unwrap()))),
@@ -74,7 +53,7 @@ async fn main() {
                                 if let RESPValue::Array(array) = parsed
                                     && let Some(arr) = array
                                     && !arr.is_empty()
-                                    && let Some(cmd) = as_str(&arr[0])
+                                    && let Some(cmd) = arr[0].as_str()
                                 {
                                     let response = match cmd.to_lowercase().as_str() {
                                         "ping" => RESPValue::SimpleString("PONG".to_string()),
@@ -111,7 +90,7 @@ async fn main() {
 
                                             let vec_len = match lock.get_mut(&key) {
                                                 Some(val) => {
-                                                    let vec = as_vec_mut(&mut val.value).unwrap();
+                                                    let vec = val.value.as_vec_mut().unwrap();
                                                     vec.extend_from_slice(&arr[2..]);
                                                     vec.len()
                                                 }
@@ -121,7 +100,7 @@ async fn main() {
                                                     lock.insert(
                                                         key,
                                                         Value {
-                                                            value: RESPValue::Array(Some(vec)),
+                                                            value: vec.into(),
                                                             expires_at: None,
                                                         },
                                                     );
@@ -137,7 +116,7 @@ async fn main() {
 
                                             let vec_len = match lock.get_mut(&key) {
                                                 Some(val) => {
-                                                    let vec = as_vec_mut(&mut val.value).unwrap();
+                                                    let vec = val.value.as_vec_mut().unwrap();
                                                     vec.splice(
                                                         0..0,
                                                         arr[2..].iter().rev().cloned(),
@@ -151,7 +130,7 @@ async fn main() {
                                                     lock.insert(
                                                         key,
                                                         Value {
-                                                            value: RESPValue::Array(Some(vec)),
+                                                            value: vec.into(),
                                                             expires_at: None,
                                                         },
                                                     );
@@ -167,10 +146,11 @@ async fn main() {
 
                                             match lock.get_mut(&key) {
                                                 Some(val) => {
-                                                    let vec = as_vec_mut(&mut val.value).unwrap();
+                                                    let vec = val.value.as_vec_mut().unwrap();
 
                                                     if arr.len() > 2 {
-                                                        let amount = as_str(&arr[2])
+                                                        let amount = arr[2]
+                                                            .as_str()
                                                             .unwrap()
                                                             .parse::<usize>()
                                                             .unwrap()
@@ -194,7 +174,7 @@ async fn main() {
                                             let lock = loc_store.lock().unwrap();
 
                                             let vec_len = match lock.get(&key) {
-                                                Some(val) => as_vec(&val.value).unwrap().len(),
+                                                Some(val) => val.value.as_vec().unwrap().len(),
                                                 None => 0,
                                             };
 
@@ -205,10 +185,11 @@ async fn main() {
                                             let lock = loc_store.lock().unwrap();
                                             match lock.get(&key) {
                                                 Some(val) => {
-                                                    let vec = as_vec(&val.value).unwrap();
+                                                    let vec = val.value.as_vec().unwrap();
 
                                                     let start: usize = {
-                                                        let s: i64 = as_str(&arr[2])
+                                                        let s: i64 = arr[2]
+                                                            .as_str()
                                                             .unwrap()
                                                             .parse()
                                                             .unwrap();
@@ -221,7 +202,8 @@ async fn main() {
                                                     };
 
                                                     let stop: usize = {
-                                                        let s = as_str(&arr[3])
+                                                        let s = arr[3]
+                                                            .as_str()
                                                             .unwrap()
                                                             .parse::<i64>()
                                                             .unwrap()
@@ -235,14 +217,12 @@ async fn main() {
                                                     };
 
                                                     if start > stop || start >= vec.len() {
-                                                        RESPValue::Array(Some(vec![]))
+                                                        vec![].into()
                                                     } else {
-                                                        RESPValue::Array(Some(
-                                                            vec[start..=stop].to_vec(),
-                                                        ))
+                                                        vec[start..=stop].to_vec().into()
                                                     }
                                                 }
-                                                None => RESPValue::Array(Some(vec![])),
+                                                None => vec![].into(),
                                             }
                                         }
                                         _ => RESPValue::SimpleError(format!(

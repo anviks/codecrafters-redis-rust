@@ -18,6 +18,47 @@ impl std::hash::Hash for RESPValue {
 
 impl Eq for RESPValue {}
 
+impl From<String> for RESPValue {
+    fn from(value: String) -> Self {
+        RESPValue::BulkString(Some(value))
+    }
+}
+
+impl From<i64> for RESPValue {
+    fn from(value: i64) -> Self {
+        RESPValue::Integer(value)
+    }
+}
+
+impl From<Vec<RESPValue>> for RESPValue {
+    fn from(value: Vec<RESPValue>) -> Self {
+        RESPValue::Array(Some(value))
+    }
+}
+
+impl RESPValue {
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        match self {
+            RESPValue::BulkString(Some(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_vec(&self) -> Option<&Vec<RESPValue>> {
+        match self {
+            RESPValue::Array(Some(vec)) => Some(vec),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut Vec<RESPValue>> {
+        match self {
+            RESPValue::Array(Some(vec)) => Some(vec),
+            _ => None,
+        }
+    }
+}
+
 fn read_until_crlf<'a>(input: &'a [u8], i: &mut usize) -> &'a [u8] {
     let start = *i;
     while input[*i] != b'\r' {
@@ -59,7 +100,7 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
             }
             let slice = &input[*i..*i + count as usize];
             *i += count as usize + 2;
-            RESPValue::BulkString(Some(str::from_utf8(slice).unwrap().to_string()))
+            str::from_utf8(slice).unwrap().to_string().into()
         }
         b'*' => {
             let count: i32 = str::from_utf8(read_until_crlf(input, i))
