@@ -161,7 +161,7 @@ async fn main() {
 
                                             RESPValue::Integer(vec_len as i64)
                                         }
-                                        "lpop" if arr.len() > 2 => {
+                                        "lpop" if arr.len() > 1 => {
                                             let key = arr[1].clone();
                                             let mut lock = loc_store.lock().unwrap();
 
@@ -169,8 +169,8 @@ async fn main() {
                                                 Some(val) => {
                                                     let vec = as_vec_mut(&mut val.value).unwrap();
 
-                                                    if arr.len() > 3 {
-                                                        let amount = as_str(&arr[3])
+                                                    if arr.len() > 2 {
+                                                        let amount = as_str(&arr[2])
                                                             .unwrap()
                                                             .parse::<usize>()
                                                             .unwrap()
