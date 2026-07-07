@@ -1,6 +1,6 @@
 use crate::resp::{CmdError, RESPValue, decode, encode};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ops::Add,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -8,6 +8,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::oneshot,
 };
 mod resp;
 
@@ -41,11 +42,11 @@ fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
     }
 }
 
-fn cmd_lpop(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_lpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let mut lock = store.lock().unwrap();
 
-    match lock.get_mut(key) {
+    match lock.entries.get_mut(key) {
         Some(val) => {
             let vec = val.value.try_vec_mut()?;
 
@@ -64,11 +65,11 @@ fn cmd_lpop(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     }
 }
 
-fn cmd_lpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_lpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let mut lock = store.lock().unwrap();
 
-    let vec_len = match lock.get_mut(key) {
+    let vec_len = match lock.entries.get_mut(key) {
         Some(val) => {
             let vec = val.value.try_vec_mut()?;
             vec.splice(0..0, arr[2..].iter().rev().cloned());
@@ -78,7 +79,7 @@ fn cmd_lpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
             let mut vec = arr[2..].to_vec();
             vec.reverse();
             let len = vec.len();
-            lock.insert(
+            lock.entries.insert(
                 key.to_string(),
                 Value {
                     value: vec.into(),
@@ -92,11 +93,11 @@ fn cmd_lpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     Ok(RESPValue::Integer(vec_len as i64))
 }
 
-fn cmd_llen(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_llen(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let lock = store.lock().unwrap();
 
-    let vec_len = match lock.get(key) {
+    let vec_len = match lock.entries.get(key) {
         Some(val) => val.value.try_vec()?.len(),
         None => 0,
     };
@@ -104,10 +105,10 @@ fn cmd_llen(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     Ok(RESPValue::Integer(vec_len as i64))
 }
 
-fn cmd_lrange(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let lock = store.lock().unwrap();
-    match lock.get(key) {
+    match lock.entries.get(key) {
         Some(val) => {
             let vec = val.value.try_vec()?;
 
@@ -141,12 +142,12 @@ fn cmd_lrange(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     }
 }
 
-fn cmd_get(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_get(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let mut lock = store.lock().unwrap();
-    match lock.get(key) {
+    match lock.entries.get(key) {
         Some(val) if val.expires_at.map_or(false, |inst| Instant::now() >= inst) => {
-            lock.remove(key);
+            lock.entries.remove(key);
             Ok(RESPValue::BulkString(None))
         }
         Some(val) => Ok(val.value.clone()),
@@ -154,34 +155,47 @@ fn cmd_get(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     }
 }
 
-fn cmd_set(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let value = Value {
         value: arg(&arr, 2)?.to_string().into(),
         expires_at: parse_expiry(&arr[3..]),
     };
 
-    store.lock().unwrap().insert(key.to_string(), value);
+    store.lock().unwrap().entries.insert(key.to_string(), value);
     Ok(RESPValue::SimpleString("OK".to_string()))
 }
 
-fn cmd_rpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
+fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
+    let mut values: VecDeque<RESPValue> = arr[2..].to_vec().into();
     let mut lock = store.lock().unwrap();
 
-    let vec_len = match lock.get_mut(key) {
+    if let Some(waiters) = lock.waiters.get_mut(key) {
+        while let Some(val) = values.pop_front() {
+            let Some(w) = waiters.pop_front() else {
+                values.push_front(val);
+                break;
+            };
+
+            if let Err(returned) = w.send(val) {
+                values.push_front(returned);
+            }
+        }
+    };
+
+    let vec_len = match lock.entries.get_mut(key) {
         Some(val) => {
             let vec = val.value.try_vec_mut()?;
-            vec.extend_from_slice(&arr[2..]);
+            vec.extend(values);
             vec.len()
         }
         None => {
-            let vec = arr[2..].to_vec();
-            let len = vec.len();
-            lock.insert(
+            let len = values.len();
+            lock.entries.insert(
                 key.to_string(),
                 Value {
-                    value: vec.into(),
+                    value: Vec::from(values).into(),
                     expires_at: None,
                 },
             );
@@ -192,11 +206,39 @@ fn cmd_rpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     Ok(RESPValue::Integer(vec_len as i64))
 }
 
-type Store = Arc<Mutex<HashMap<String, Value>>>;
+async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg(&arr, 1)?;
+
+    if let Some(val) = store.lock().unwrap().entries.get_mut(key) {
+        let vec = val.value.try_vec_mut()?;
+        if !vec.is_empty() {
+            return Ok(vec.remove(0));
+        }
+    }
+
+    let (sender, receiver) = oneshot::channel();
+
+    {
+        let mut lock = store.lock().unwrap();
+        let waiter = lock.waiters.entry(key.to_string()).or_insert(vec![].into());
+        waiter.push_back(sender);
+    }
+
+    Ok(receiver.await.unwrap_or(RESPValue::BulkString(None)))
+}
+
+struct Store {
+    entries: HashMap<String, Value>,
+    waiters: HashMap<String, VecDeque<oneshot::Sender<RESPValue>>>,
+}
+type SharedStore = Arc<Mutex<Store>>;
 
 #[tokio::main]
 async fn main() {
-    let store: Store = Arc::new(Mutex::new(HashMap::new()));
+    let store: SharedStore = Arc::new(Mutex::new(Store {
+        entries: HashMap::new(),
+        waiters: HashMap::new(),
+    }));
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
     loop {
@@ -230,6 +272,7 @@ async fn main() {
                                         "lpop" => cmd_lpop(&arr, &loc_store),
                                         "llen" => cmd_llen(&arr, &loc_store),
                                         "lrange" => cmd_lrange(&arr, &loc_store),
+                                        "blpop" => cmd_blpop(&arr, &loc_store).await,
                                         _ => Err(CmdError::Unknown),
                                     };
 

@@ -1,9 +1,16 @@
-#[derive(Debug)]
+use thiserror::Error;
+
+#[derive(Error, Debug)]
 pub(crate) enum CmdError {
+    #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
     WrongType,
+    #[error("value is not an integer or out of range")]
     NotInt,
+    #[error("value is not an integer or out of range")]
     NotUint,
+    #[error("ERR wrong number of arguments for command")]
     WrongArgs,
+    #[error("ERR unknown command")]
     Unknown,
 }
 
