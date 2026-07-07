@@ -1,3 +1,12 @@
+#[derive(Debug)]
+pub(crate) enum CmdError {
+    WrongType,
+    NotInt,
+    NotUint,
+    WrongArgs,
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RESPValue {
     SimpleString(String),
@@ -56,6 +65,18 @@ impl RESPValue {
             RESPValue::Array(Some(vec)) => Some(vec),
             _ => None,
         }
+    }
+
+    pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
+        self.as_str().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_vec(&self) -> Result<&Vec<RESPValue>, CmdError> {
+        self.as_vec().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut Vec<RESPValue>, CmdError> {
+        self.as_vec_mut().ok_or(CmdError::WrongType)
     }
 }
 

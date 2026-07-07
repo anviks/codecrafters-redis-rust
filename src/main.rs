@@ -1,4 +1,4 @@
-use crate::resp::{RESPValue, decode, encode};
+use crate::resp::{CmdError, RESPValue, decode, encode};
 use std::{
     collections::HashMap,
     ops::Add,
@@ -17,17 +17,9 @@ struct Value {
     expires_at: Option<Instant>,
 }
 
-#[derive(Debug)]
-enum CmdError {
-    WrongType,
-    NotInt,
-    WrongArgs,
-}
-
 fn arg(arr: &[RESPValue], i: usize) -> Result<&str, CmdError> {
-    arr.get(i)
-        .and_then(|v| v.as_str())
-        .ok_or(CmdError::WrongArgs)
+    let arg = arr.get(i).ok_or(CmdError::WrongArgs)?;
+    arg.try_str()
 }
 
 fn arg_int(arr: &[RESPValue], i: usize) -> Result<i64, CmdError> {
@@ -35,7 +27,7 @@ fn arg_int(arr: &[RESPValue], i: usize) -> Result<i64, CmdError> {
 }
 
 fn arg_uint(arr: &[RESPValue], i: usize) -> Result<u64, CmdError> {
-    arg(arr, i)?.parse().map_err(|_| CmdError::NotInt)
+    arg(arr, i)?.parse().map_err(|_| CmdError::NotUint)
 }
 
 fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
@@ -55,7 +47,7 @@ fn cmd_lpop(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
 
     match lock.get_mut(key) {
         Some(val) => {
-            let vec = val.value.as_vec_mut().unwrap();
+            let vec = val.value.try_vec_mut()?;
 
             if arr.len() > 2 {
                 let amount = (arg_int(&arr, 2)? as usize).min(vec.len());
@@ -78,7 +70,7 @@ fn cmd_lpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
 
     let vec_len = match lock.get_mut(key) {
         Some(val) => {
-            let vec = val.value.as_vec_mut().unwrap();
+            let vec = val.value.try_vec_mut()?;
             vec.splice(0..0, arr[2..].iter().rev().cloned());
             vec.len()
         }
@@ -105,7 +97,7 @@ fn cmd_llen(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     let lock = store.lock().unwrap();
 
     let vec_len = match lock.get(key) {
-        Some(val) => val.value.as_vec().unwrap().len(),
+        Some(val) => val.value.try_vec()?.len(),
         None => 0,
     };
 
@@ -117,7 +109,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     let lock = store.lock().unwrap();
     match lock.get(key) {
         Some(val) => {
-            let vec = val.value.as_vec().unwrap();
+            let vec = val.value.try_vec()?;
 
             let start: usize = {
                 let s = arg_int(&arr, 2)?;
@@ -179,7 +171,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
 
     let vec_len = match lock.get_mut(key) {
         Some(val) => {
-            let vec = val.value.as_vec_mut().unwrap();
+            let vec = val.value.try_vec_mut()?;
             vec.extend_from_slice(&arr[2..]);
             vec.len()
         }
@@ -238,10 +230,7 @@ async fn main() {
                                         "lpop" => cmd_lpop(&arr, &loc_store),
                                         "llen" => cmd_llen(&arr, &loc_store),
                                         "lrange" => cmd_lrange(&arr, &loc_store),
-                                        _ => Ok(RESPValue::SimpleError(format!(
-                                            "ERR unknown command '{}' (or insufficient arguments)",
-                                            cmd
-                                        ))),
+                                        _ => Err(CmdError::Unknown),
                                     };
 
                                     let output = match response {
