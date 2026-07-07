@@ -34,18 +34,18 @@ fn arg_int(arr: &[RESPValue], i: usize) -> Result<i64, CmdError> {
     arg(arr, i)?.parse().map_err(|_| CmdError::NotInt)
 }
 
+fn arg_uint(arr: &[RESPValue], i: usize) -> Result<u64, CmdError> {
+    arg(arr, i)?.parse().map_err(|_| CmdError::NotInt)
+}
+
 fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
-    if args.len() > 1
-        && let Some(str) = args[0].as_str()
-        && let Some(int) = args[1].as_str()
-    {
-        match str.to_lowercase().as_str() {
-            "ex" => Some(Instant::now().add(Duration::from_secs(int.parse().unwrap()))),
-            "px" => Some(Instant::now().add(Duration::from_millis(int.parse().unwrap()))),
-            _ => None,
-        }
-    } else {
-        None
+    let str = arg(args, 0).ok()?;
+    let uint = arg_uint(args, 1).ok()?;
+
+    match str.to_lowercase().as_str() {
+        "ex" => Some(Instant::now().add(Duration::from_secs(uint))),
+        "px" => Some(Instant::now().add(Duration::from_millis(uint))),
+        _ => None,
     }
 }
 
@@ -120,7 +120,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
             let vec = val.value.as_vec().unwrap();
 
             let start: usize = {
-                let s: i64 = arr[2].as_str().unwrap().parse().unwrap();
+                let s = arg_int(&arr, 2)?;
 
                 if s < 0 {
                     (vec.len() as i64 + s).max(0) as usize
@@ -130,12 +130,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
             };
 
             let stop: usize = {
-                let s = arr[3]
-                    .as_str()
-                    .unwrap()
-                    .parse::<i64>()
-                    .unwrap()
-                    .min((vec.len() - 1) as i64);
+                let s = arg_int(&arr, 3)?.min((vec.len() - 1) as i64);
 
                 if s < 0 {
                     (vec.len() as i64 + s).max(0) as usize
@@ -170,7 +165,7 @@ fn cmd_get(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
 fn cmd_set(arr: &[RESPValue], store: &Store) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let value = Value {
-        value: arr[2].clone(),
+        value: arg(&arr, 2)?.to_string().into(),
         expires_at: parse_expiry(&arr[3..]),
     };
 
