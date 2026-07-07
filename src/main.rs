@@ -24,7 +24,14 @@ fn as_str(v: &RESPValue) -> Option<&str> {
     }
 }
 
-fn as_vec(v: RESPValue) -> Option<Vec<RESPValue>> {
+fn as_vec(v: &RESPValue) -> Option<&Vec<RESPValue>> {
+    match v {
+        RESPValue::Array(Some(vec)) => Some(vec),
+        _ => None,
+    }
+}
+
+fn as_vec_mut(v: &mut RESPValue) -> Option<&mut Vec<RESPValue>> {
     match v {
         RESPValue::Array(Some(vec)) => Some(vec),
         _ => None,
@@ -102,20 +109,25 @@ async fn main() {
                                             let key = arr[1].clone();
                                             let mut lock = loc_store.lock().unwrap();
 
-                                            let mut vec = match lock.remove(&key) {
-                                                Some(val) => as_vec(val.value).unwrap(),
-                                                None => vec![],
+                                            let vec_len = match lock.get_mut(&key) {
+                                                Some(val) => {
+                                                    let vec = as_vec_mut(&mut val.value).unwrap();
+                                                    vec.extend_from_slice(&arr[2..]);
+                                                    vec.len()
+                                                }
+                                                None => {
+                                                    let vec = arr[2..].to_vec();
+                                                    let len = vec.len();
+                                                    lock.insert(
+                                                        key,
+                                                        Value {
+                                                            value: RESPValue::Array(Some(vec)),
+                                                            expires_at: None,
+                                                        },
+                                                    );
+                                                    len
+                                                }
                                             };
-                                            vec.extend_from_slice(&arr[2..]);
-                                            let vec_len = vec.len();
-
-                                            lock.insert(
-                                                key,
-                                                Value {
-                                                    value: RESPValue::Array(Some(vec)),
-                                                    expires_at: None,
-                                                },
-                                            );
 
                                             RESPValue::Integer(vec_len as i64)
                                         }
@@ -123,22 +135,29 @@ async fn main() {
                                             let key = arr[1].clone();
                                             let mut lock = loc_store.lock().unwrap();
 
-                                            let vec = match lock.remove(&key) {
-                                                Some(val) => as_vec(val.value).unwrap(),
-                                                None => vec![],
+                                            let vec_len = match lock.get_mut(&key) {
+                                                Some(val) => {
+                                                    let vec = as_vec_mut(&mut val.value).unwrap();
+                                                    vec.splice(
+                                                        0..0,
+                                                        arr[2..].iter().rev().cloned(),
+                                                    );
+                                                    vec.len()
+                                                }
+                                                None => {
+                                                    let mut vec = arr[2..].to_vec();
+                                                    vec.reverse();
+                                                    let len = vec.len();
+                                                    lock.insert(
+                                                        key,
+                                                        Value {
+                                                            value: RESPValue::Array(Some(vec)),
+                                                            expires_at: None,
+                                                        },
+                                                    );
+                                                    len
+                                                }
                                             };
-                                            let mut vec2 = arr[2..].to_vec();
-                                            vec2.reverse();
-                                            vec2.extend(vec);
-                                            let vec_len = vec2.len();
-
-                                            lock.insert(
-                                                key,
-                                                Value {
-                                                    value: RESPValue::Array(Some(vec2)),
-                                                    expires_at: None,
-                                                },
-                                            );
 
                                             RESPValue::Integer(vec_len as i64)
                                         }
@@ -147,7 +166,7 @@ async fn main() {
                                             let lock = loc_store.lock().unwrap();
 
                                             let vec_len = match lock.get(&key) {
-                                                Some(val) => as_vec(val.value.clone()).unwrap().len(),
+                                                Some(val) => as_vec(&val.value).unwrap().len(),
                                                 None => 0,
                                             };
 
@@ -158,7 +177,7 @@ async fn main() {
                                             let lock = loc_store.lock().unwrap();
                                             match lock.get(&key) {
                                                 Some(val) => {
-                                                    let vec = as_vec(val.value.clone()).unwrap();
+                                                    let vec = as_vec(&val.value).unwrap();
 
                                                     let start: usize = {
                                                         let s: i64 = as_str(&arr[2])
