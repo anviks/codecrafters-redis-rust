@@ -161,6 +161,34 @@ async fn main() {
 
                                             RESPValue::Integer(vec_len as i64)
                                         }
+                                        "lpop" if arr.len() > 2 => {
+                                            let key = arr[1].clone();
+                                            let mut lock = loc_store.lock().unwrap();
+
+                                            match lock.get_mut(&key) {
+                                                Some(val) => {
+                                                    let vec = as_vec_mut(&mut val.value).unwrap();
+
+                                                    if arr.len() > 3 {
+                                                        let amount = as_str(&arr[3])
+                                                            .unwrap()
+                                                            .parse::<usize>()
+                                                            .unwrap()
+                                                            .min(vec.len());
+                                                        RESPValue::Array(Some(
+                                                            vec.splice(0..amount, []).collect(),
+                                                        ))
+                                                    } else {
+                                                        if vec.is_empty() {
+                                                            RESPValue::BulkString(None)
+                                                        } else {
+                                                            vec.remove(0)
+                                                        }
+                                                    }
+                                                }
+                                                None => RESPValue::BulkString(None),
+                                            }
+                                        }
                                         "llen" if arr.len() > 1 => {
                                             let key = arr[1].clone();
                                             let lock = loc_store.lock().unwrap();
