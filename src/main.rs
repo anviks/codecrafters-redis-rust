@@ -169,6 +169,7 @@ fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
 fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let mut values: VecDeque<RESPValue> = arr[2..].to_vec().into();
+    let mut sent_values = 0;
     let mut lock = store.lock().unwrap();
 
     if let Some(waiters) = lock.waiters.get_mut(key) {
@@ -180,7 +181,10 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 
             if let Err(returned) = w.send(val) {
                 values.push_front(returned);
+                continue;
             }
+
+            sent_values += 1;
         }
     };
 
@@ -203,7 +207,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
         }
     };
 
-    Ok(RESPValue::Integer(vec_len as i64))
+    Ok(RESPValue::Integer((vec_len + sent_values) as i64))
 }
 
 async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
