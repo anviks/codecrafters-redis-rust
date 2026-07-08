@@ -179,7 +179,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
                 break;
             };
 
-            if let Err(returned) = w.send(val) {
+            if let Err(returned) = w.send(vec![key.to_string().into(), val].into()) {
                 values.push_front(returned);
                 continue;
             }
