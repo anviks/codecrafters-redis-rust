@@ -248,6 +248,17 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     }
 }
 
+fn cmd_type(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg(&arr, 1)?;
+    Ok(match store.lock().unwrap().entries.get(key) {
+        Some(Value { value, expires_at: _ }) => match value {
+            RESPValue::BulkString(Some(_)) => RESPValue::SimpleString("string".to_string()),
+            _ => RESPValue::SimpleString("none".to_string()),
+        },
+        None => RESPValue::SimpleString("none".to_string()),
+    })
+}
+
 struct Store {
     entries: HashMap<String, Value>,
     waiters: HashMap<String, VecDeque<oneshot::Sender<RESPValue>>>,
@@ -294,6 +305,7 @@ async fn main() {
                                         "llen" => cmd_llen(&arr, &loc_store),
                                         "lrange" => cmd_lrange(&arr, &loc_store),
                                         "blpop" => cmd_blpop(&arr, &loc_store).await,
+                                        "type" => cmd_type(&arr, &loc_store),
                                         _ => Err(CmdError::Unknown),
                                     };
 
