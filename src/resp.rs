@@ -8,6 +8,8 @@ pub(crate) enum CmdError {
     NotInt,
     #[error("value is not an integer or out of range")]
     NotUint,
+    #[error("value is not a double or out of range")]
+    NotDouble,
     #[error("ERR wrong number of arguments for command")]
     WrongArgs,
     #[error("ERR unknown command")]

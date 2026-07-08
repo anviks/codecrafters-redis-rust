@@ -31,6 +31,10 @@ fn arg_uint(arr: &[RESPValue], i: usize) -> Result<u64, CmdError> {
     arg(arr, i)?.parse().map_err(|_| CmdError::NotUint)
 }
 
+fn arg_double(arr: &[RESPValue], i: usize) -> Result<f64, CmdError> {
+    arg(arr, i)?.parse().map_err(|_| CmdError::NotDouble)
+}
+
 fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
     let str = arg(args, 0).ok()?;
     let uint = arg_uint(args, 1).ok()?;
@@ -179,7 +183,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
                 break;
             };
 
-            if let Err(returned) = w.send(vec![key.to_string().into(), val].into()) {
+            if let Err(returned) = w.send(val) {
                 values.push_front(returned);
                 continue;
             }
@@ -228,7 +232,20 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         waiter.push_back(sender);
     }
 
-    Ok(receiver.await.unwrap_or(RESPValue::BulkString(None)))
+    let timeout = arg_double(&arr, 2)?;
+
+    if timeout > 0.0 {
+        let duration = Duration::from_secs_f64(timeout);
+        Ok(match tokio::time::timeout(duration, receiver).await {
+            Ok(Ok(value)) => vec![key.to_string().into(), value].into(),
+            _ => RESPValue::BulkString(None),
+        })
+    } else {
+        Ok(receiver
+            .await
+            .map(|value| vec![key.to_string().into(), value].into())
+            .unwrap_or(RESPValue::BulkString(None)))
+    }
 }
 
 struct Store {
@@ -283,7 +300,7 @@ async fn main() {
                                     let output = match response {
                                         Ok(val) => encode(&val),
                                         Err(err) => {
-                                            encode(&RESPValue::SimpleError(format!("{:?}", err)))
+                                            encode(&RESPValue::SimpleError(format!("{}", err)))
                                         }
                                     };
 
