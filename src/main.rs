@@ -238,13 +238,13 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         let duration = Duration::from_secs_f64(timeout);
         Ok(match tokio::time::timeout(duration, receiver).await {
             Ok(Ok(value)) => vec![key.to_string().into(), value].into(),
-            _ => RESPValue::BulkString(None),
+            _ => RESPValue::Array(None),
         })
     } else {
         Ok(receiver
             .await
             .map(|value| vec![key.to_string().into(), value].into())
-            .unwrap_or(RESPValue::BulkString(None)))
+            .unwrap_or(RESPValue::Array(None)))
     }
 }
 
