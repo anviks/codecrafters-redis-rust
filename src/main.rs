@@ -15,7 +15,7 @@ mod resp;
 #[derive(Clone, Debug)]
 enum Data {
     String(String),
-    List(Vec<String>),
+    List(VecDeque<String>),
 }
 
 impl Data {
@@ -26,14 +26,14 @@ impl Data {
         }
     }
 
-    pub(crate) fn as_vec(&self) -> Option<&Vec<String>> {
+    pub(crate) fn as_vec(&self) -> Option<&VecDeque<String>> {
         match self {
             Data::List(vec) => Some(vec),
             _ => None,
         }
     }
 
-    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut Vec<String>> {
+    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut VecDeque<String>> {
         match self {
             Data::List(vec) => Some(vec),
             _ => None,
@@ -44,11 +44,11 @@ impl Data {
         self.as_str().ok_or(CmdError::WrongType)
     }
 
-    pub(crate) fn try_vec(&self) -> Result<&Vec<String>, CmdError> {
+    pub(crate) fn try_vec(&self) -> Result<&VecDeque<String>, CmdError> {
         self.as_vec().ok_or(CmdError::WrongType)
     }
 
-    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut Vec<String>, CmdError> {
+    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut VecDeque<String>, CmdError> {
         self.as_vec_mut().ok_or(CmdError::WrongType)
     }
 }
@@ -76,6 +76,12 @@ fn arg_double(arr: &[RESPValue], i: usize) -> Result<f64, CmdError> {
     arg(arr, i)?.parse().map_err(|_| CmdError::NotDouble)
 }
 
+fn to_strings(arr: &[RESPValue]) -> Result<Vec<String>, CmdError> {
+    arr.iter()
+        .map(|resp| resp.try_str().map(str::to_string))
+        .collect()
+}
+
 fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
     let str = arg(args, 0).ok()?;
     let uint = arg_uint(args, 1).ok()?;
@@ -97,16 +103,13 @@ fn cmd_lpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 
             if arr.len() > 2 {
                 let amount = (arg_int(&arr, 2)? as usize).min(vec.len());
-                Ok(vec
-                    .splice(0..amount, [])
-                    .map(RESPValue::from)
-                    .collect::<Vec<RESPValue>>()
-                    .into())
+                let popped: Vec<RESPValue> = vec.drain(..amount).map(RESPValue::from).collect();
+                Ok(popped.into())
             } else {
                 Ok(if vec.is_empty() {
                     RESPValue::BulkString(None)
                 } else {
-                    vec.remove(0).into()
+                    vec.pop_front().unwrap().into()
                 })
             }
         }
@@ -121,25 +124,19 @@ fn cmd_lpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
     let vec_len = match lock.entries.get_mut(key) {
         Some(val) => {
             let vec = val.data.try_vec_mut()?;
-            let values = arr[2..]
-                .iter()
-                .rev()
-                .map(|resp| resp.try_str().map(str::to_string))
-                .collect::<Result<Vec<String>, CmdError>>()?;
-            vec.splice(0..0, values);
+            for v in to_strings(&arr[2..])? {
+                vec.push_front(v);
+            }
             vec.len()
         }
         None => {
-            let mut vec = arr[2..]
-                .iter()
-                .map(|resp| resp.try_str().map(str::to_string))
-                .collect::<Result<Vec<String>, CmdError>>()?;
+            let mut vec = to_strings(&arr[2..])?;
             vec.reverse();
             let len = vec.len();
             lock.entries.insert(
                 key.to_string(),
                 Value {
-                    data: Data::List(vec),
+                    data: Data::List(vec.into()),
                     expires_at: None,
                 },
             );
@@ -192,11 +189,11 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
             if start > stop || start >= vec.len() {
                 Ok(vec![].into())
             } else {
-                Ok(vec[start..=stop]
-                    .to_vec()
+                Ok(vec
+                    .range(start..=stop)
                     .into_iter()
-                    .map(RESPValue::from)
-                    .collect::<Vec<RESPValue>>()
+                    .map(|s| s.clone().into())
+                    .collect::<VecDeque<RESPValue>>()
                     .into())
             }
         }
@@ -233,10 +230,7 @@ fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
 
 fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
-    let mut values = arr[2..]
-        .iter()
-        .map(|resp| resp.try_str().map(str::to_string))
-        .collect::<Result<VecDeque<String>, CmdError>>()?;
+    let mut values: VecDeque<String> = to_strings(&arr[2..])?.into();
     let mut sent_values = 0;
     let mut lock = store.lock().unwrap();
 
@@ -267,7 +261,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
             lock.entries.insert(
                 key.to_string(),
                 Value {
-                    data: Data::List(Vec::from(values)),
+                    data: Data::List(VecDeque::from(values)),
                     expires_at: None,
                 },
             );
@@ -283,8 +277,8 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
 
     if let Some(val) = store.lock().unwrap().entries.get_mut(key) {
         let vec = val.data.try_vec_mut()?;
-        if !vec.is_empty() {
-            return Ok(vec.remove(0).into());
+        if let Some(v) = vec.pop_front() {
+            return Ok(v.into());
         }
     }
 

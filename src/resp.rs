@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -51,6 +53,12 @@ impl From<i64> for RESPValue {
 impl From<Vec<RESPValue>> for RESPValue {
     fn from(value: Vec<RESPValue>) -> Self {
         RESPValue::Array(Some(value))
+    }
+}
+
+impl From<VecDeque<RESPValue>> for RESPValue {
+    fn from(value: VecDeque<RESPValue>) -> Self {
+        value.into()
     }
 }
 
