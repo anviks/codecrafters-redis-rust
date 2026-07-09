@@ -274,23 +274,25 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 
 async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
+    let timeout = arg_double(&arr, 2)?;
 
-    if let Some(val) = store.lock().unwrap().entries.get_mut(key) {
-        let vec = val.data.try_vec_mut()?;
-        if let Some(v) = vec.pop_front() {
-            return Ok(vec![key.to_string().into(), v.into()].into());
-        }
-    }
-
-    let (sender, receiver) = oneshot::channel();
-
-    {
+    let receiver = {
         let mut lock = store.lock().unwrap();
+
+        if let Some(val) = lock.entries.get_mut(key) {
+            let vec = val.data.try_vec_mut()?;
+            if let Some(v) = vec.pop_front() {
+                return Ok(vec![key.to_string().into(), v.into()].into());
+            }
+        }
+
+        let (sender, receiver) = oneshot::channel();
+
         let waiter = lock.waiters.entry(key.to_string()).or_insert(vec![].into());
         waiter.push_back(sender);
-    }
 
-    let timeout = arg_double(&arr, 2)?;
+        receiver
+    };
 
     if timeout > 0.0 {
         let duration = Duration::from_secs_f64(timeout);
