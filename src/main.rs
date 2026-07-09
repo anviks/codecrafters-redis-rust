@@ -13,8 +13,49 @@ use tokio::{
 mod resp;
 
 #[derive(Clone, Debug)]
+enum Data {
+    String(String),
+    List(Vec<String>),
+}
+
+impl Data {
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        match self {
+            Data::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_vec(&self) -> Option<&Vec<String>> {
+        match self {
+            Data::List(vec) => Some(vec),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut Vec<String>> {
+        match self {
+            Data::List(vec) => Some(vec),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
+        self.as_str().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_vec(&self) -> Result<&Vec<String>, CmdError> {
+        self.as_vec().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut Vec<String>, CmdError> {
+        self.as_vec_mut().ok_or(CmdError::WrongType)
+    }
+}
+
+#[derive(Clone, Debug)]
 struct Value {
-    value: RESPValue,
+    data: Data,
     expires_at: Option<Instant>,
 }
 
@@ -52,16 +93,20 @@ fn cmd_lpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 
     match lock.entries.get_mut(key) {
         Some(val) => {
-            let vec = val.value.try_vec_mut()?;
+            let vec = val.data.try_vec_mut()?;
 
             if arr.len() > 2 {
                 let amount = (arg_int(&arr, 2)? as usize).min(vec.len());
-                Ok(RESPValue::Array(Some(vec.splice(0..amount, []).collect())))
+                Ok(vec
+                    .splice(0..amount, [])
+                    .map(RESPValue::from)
+                    .collect::<Vec<RESPValue>>()
+                    .into())
             } else {
                 Ok(if vec.is_empty() {
                     RESPValue::BulkString(None)
                 } else {
-                    vec.remove(0)
+                    vec.remove(0).into()
                 })
             }
         }
@@ -75,18 +120,26 @@ fn cmd_lpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 
     let vec_len = match lock.entries.get_mut(key) {
         Some(val) => {
-            let vec = val.value.try_vec_mut()?;
-            vec.splice(0..0, arr[2..].iter().rev().cloned());
+            let vec = val.data.try_vec_mut()?;
+            let values = arr[2..]
+                .iter()
+                .rev()
+                .map(|resp| resp.try_str().map(str::to_string))
+                .collect::<Result<Vec<String>, CmdError>>()?;
+            vec.splice(0..0, values);
             vec.len()
         }
         None => {
-            let mut vec = arr[2..].to_vec();
+            let mut vec = arr[2..]
+                .iter()
+                .map(|resp| resp.try_str().map(str::to_string))
+                .collect::<Result<Vec<String>, CmdError>>()?;
             vec.reverse();
             let len = vec.len();
             lock.entries.insert(
                 key.to_string(),
                 Value {
-                    value: vec.into(),
+                    data: Data::List(vec),
                     expires_at: None,
                 },
             );
@@ -102,7 +155,7 @@ fn cmd_llen(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     let lock = store.lock().unwrap();
 
     let vec_len = match lock.entries.get(key) {
-        Some(val) => val.value.try_vec()?.len(),
+        Some(val) => val.data.try_vec()?.len(),
         None => 0,
     };
 
@@ -114,7 +167,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     let lock = store.lock().unwrap();
     match lock.entries.get(key) {
         Some(val) => {
-            let vec = val.value.try_vec()?;
+            let vec = val.data.try_vec()?;
 
             let start: usize = {
                 let s = arg_int(&arr, 2)?;
@@ -139,7 +192,12 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
             if start > stop || start >= vec.len() {
                 Ok(vec![].into())
             } else {
-                Ok(vec[start..=stop].to_vec().into())
+                Ok(vec[start..=stop]
+                    .to_vec()
+                    .into_iter()
+                    .map(RESPValue::from)
+                    .collect::<Vec<RESPValue>>()
+                    .into())
             }
         }
         None => Ok(vec![].into()),
@@ -154,7 +212,10 @@ fn cmd_get(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
             lock.entries.remove(key);
             Ok(RESPValue::BulkString(None))
         }
-        Some(val) => Ok(val.value.clone()),
+        Some(val) => match &val.data {
+            Data::String(s) => Ok(s.clone().into()),
+            _ => Err(CmdError::WrongType),
+        },
         None => Ok(RESPValue::BulkString(None)),
     }
 }
@@ -162,7 +223,7 @@ fn cmd_get(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
 fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     let value = Value {
-        value: arg(&arr, 2)?.to_string().into(),
+        data: Data::String(arg(&arr, 2)?.to_string()),
         expires_at: parse_expiry(&arr[3..]),
     };
 
@@ -172,7 +233,10 @@ fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
 
 fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
-    let mut values: VecDeque<RESPValue> = arr[2..].to_vec().into();
+    let mut values = arr[2..]
+        .iter()
+        .map(|resp| resp.try_str().map(str::to_string))
+        .collect::<Result<VecDeque<String>, CmdError>>()?;
     let mut sent_values = 0;
     let mut lock = store.lock().unwrap();
 
@@ -194,7 +258,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 
     let vec_len = match lock.entries.get_mut(key) {
         Some(val) => {
-            let vec = val.value.try_vec_mut()?;
+            let vec = val.data.try_vec_mut()?;
             vec.extend(values);
             vec.len()
         }
@@ -203,7 +267,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
             lock.entries.insert(
                 key.to_string(),
                 Value {
-                    value: Vec::from(values).into(),
+                    data: Data::List(Vec::from(values)),
                     expires_at: None,
                 },
             );
@@ -218,9 +282,9 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     let key = arg(&arr, 1)?;
 
     if let Some(val) = store.lock().unwrap().entries.get_mut(key) {
-        let vec = val.value.try_vec_mut()?;
+        let vec = val.data.try_vec_mut()?;
         if !vec.is_empty() {
-            return Ok(vec.remove(0));
+            return Ok(vec.remove(0).into());
         }
     }
 
@@ -237,13 +301,13 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     if timeout > 0.0 {
         let duration = Duration::from_secs_f64(timeout);
         Ok(match tokio::time::timeout(duration, receiver).await {
-            Ok(Ok(value)) => vec![key.to_string().into(), value].into(),
+            Ok(Ok(value)) => vec![key.to_string().into(), value.into()].into(),
             _ => RESPValue::Array(None),
         })
     } else {
         Ok(receiver
             .await
-            .map(|value| vec![key.to_string().into(), value].into())
+            .map(|value| vec![key.to_string().into(), value.into()].into())
             .unwrap_or(RESPValue::Array(None)))
     }
 }
@@ -251,8 +315,11 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
 fn cmd_type(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg(&arr, 1)?;
     Ok(match store.lock().unwrap().entries.get(key) {
-        Some(Value { value, expires_at: _ }) => match value {
-            RESPValue::BulkString(Some(_)) => RESPValue::SimpleString("string".to_string()),
+        Some(Value {
+            data: value,
+            expires_at: _,
+        }) => match value {
+            Data::String(_) => RESPValue::SimpleString("string".to_string()),
             _ => RESPValue::SimpleString("none".to_string()),
         },
         None => RESPValue::SimpleString("none".to_string()),
@@ -261,7 +328,7 @@ fn cmd_type(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 
 struct Store {
     entries: HashMap<String, Value>,
-    waiters: HashMap<String, VecDeque<oneshot::Sender<RESPValue>>>,
+    waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
 }
 type SharedStore = Arc<Mutex<Store>>;
 
