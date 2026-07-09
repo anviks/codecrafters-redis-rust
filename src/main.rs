@@ -278,7 +278,7 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     if let Some(val) = store.lock().unwrap().entries.get_mut(key) {
         let vec = val.data.try_vec_mut()?;
         if let Some(v) = vec.pop_front() {
-            return Ok(v.into());
+            return Ok(vec![key.to_string().into(), v.into()].into());
         }
     }
 
