@@ -2,6 +2,7 @@ use crate::resp::{CmdError, RESPValue, decode, encode};
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
+    str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -16,6 +17,22 @@ mod resp;
 pub(crate) struct StreamId {
     pub(crate) ms: u64,
     pub(crate) seq: u64,
+}
+
+impl FromStr for StreamId {
+    type Err = CmdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.splitn(2, "-").collect();
+        if parts.len() != 2 {
+            return Err(CmdError::InvalidStreamId);
+        }
+
+        let ms: u64 = parts[0].parse().map_err(|_| CmdError::InvalidStreamId)?;
+        let seq: u64 = parts[1].parse().map_err(|_| CmdError::InvalidStreamId)?;
+
+        Ok(StreamId { ms, seq })
+    }
 }
 
 impl StreamId {
@@ -100,6 +117,13 @@ impl Data {
         }
     }
 
+    pub(crate) fn as_stream(&self) -> Option<&Stream> {
+        match self {
+            Data::Stream(stream) => Some(stream),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_stream_mut(&mut self) -> Option<&mut Stream> {
         match self {
             Data::Stream(stream) => Some(stream),
@@ -117,6 +141,10 @@ impl Data {
 
     pub(crate) fn try_vec_mut(&mut self) -> Result<&mut VecDeque<String>, CmdError> {
         self.as_vec_mut().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_stream(&self) -> Result<&Stream, CmdError> {
+        self.as_stream().ok_or(CmdError::WrongType)
     }
 
     pub(crate) fn try_stream_mut(&mut self) -> Result<&mut Stream, CmdError> {
@@ -431,6 +459,58 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     Ok(format!("{}-{}", id.ms, id.seq).into())
 }
 
+fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg(&arr, 1)?;
+    let start = {
+        let s = arg(&arr, 2)?;
+        if s.contains("-") {
+            s.parse()?
+        } else {
+            StreamId {
+                ms: arg_uint(&arr, 2)?,
+                seq: 0,
+            }
+        }
+    };
+    let end = {
+        let s = arg(&arr, 3)?;
+        if s.contains("-") {
+            s.parse()?
+        } else {
+            StreamId {
+                ms: arg_uint(&arr, 3)?,
+                seq: u64::MAX,
+            }
+        }
+    };
+
+    let lock = store.lock().unwrap();
+    match lock.entries.get(key) {
+        Some(value) => {
+            let stream = value.data.try_stream()?;
+            let entries = stream
+                .entries
+                .iter()
+                .filter(|e| start <= e.id && e.id <= end)
+                .map(|e| {
+                    vec![
+                        format!("{}-{}", e.id.ms, e.id.seq).into(),
+                        e.fields
+                            .iter()
+                            .flat_map(|(k, v)| vec![k.clone().into(), v.clone().into()])
+                            .collect::<Vec<RESPValue>>()
+                            .into(),
+                    ]
+                    .into()
+                })
+                .collect::<Vec<RESPValue>>()
+                .into();
+            Ok(entries)
+        }
+        None => Ok(RESPValue::BulkString(None)),
+    }
+}
+
 struct Store {
     entries: HashMap<String, Value>,
     waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
@@ -479,6 +559,7 @@ async fn main() {
                                         "blpop" => cmd_blpop(&arr, &loc_store).await,
                                         "type" => cmd_type(&arr, &loc_store),
                                         "xadd" => cmd_xadd(&arr, &loc_store),
+                                        "xrange" => cmd_xrange(&arr, &loc_store),
                                         _ => Err(CmdError::Unknown),
                                     };
 
