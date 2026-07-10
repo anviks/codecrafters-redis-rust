@@ -58,12 +58,6 @@ impl From<Vec<RESPValue>> for RESPValue {
     }
 }
 
-impl From<VecDeque<RESPValue>> for RESPValue {
-    fn from(value: VecDeque<RESPValue>) -> Self {
-        value.into()
-    }
-}
-
 impl RESPValue {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {

@@ -251,7 +251,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
                     .range(start..=stop)
                     .into_iter()
                     .map(|s| s.clone().into())
-                    .collect::<VecDeque<RESPValue>>()
+                    .collect::<Vec<RESPValue>>()
                     .into())
             }
         }
