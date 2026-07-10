@@ -400,6 +400,10 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     });
     let stream = val.data.try_stream_mut()?;
 
+    if id <= stream.last_id {
+        return Err(CmdError::BadStreamId);
+    }
+
     stream.entries.push(StreamEntry { id, fields });
     stream.last_id = id;
 
