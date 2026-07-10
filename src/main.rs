@@ -4,7 +4,7 @@ use std::{
     ops::Add,
     str::FromStr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,19 +19,45 @@ pub(crate) struct StreamId {
     pub(crate) seq: u64,
 }
 
-impl FromStr for StreamId {
-    type Err = CmdError;
+impl StreamId {
+    fn next_from_str(&self, s: &str) -> Result<Self, CmdError> {
+        if s == "*" {
+            let ms = {
+                let millis = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                self.ms.max(millis)
+            };
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.splitn(2, "-").collect();
-        if parts.len() != 2 {
-            return Err(CmdError::InvalidStreamId);
+            let seq = if self.ms == ms { self.seq + 1 } else { 0 };
+
+            return Ok(StreamId { ms, seq });
+        } else {
+            let parts: Vec<&str> = s.splitn(2, "-").collect();
+            if parts.len() != 2 {
+                return Err(CmdError::InvalidStreamId);
+            }
+
+            let ms: u64 = parts[0].parse().map_err(|_| CmdError::InvalidStreamId)?;
+
+            let seq = if parts[1] == "*" {
+                if self.ms == ms { self.seq + 1 } else { 0 }
+            } else {
+                parts[1].parse().map_err(|_| CmdError::InvalidStreamId)?
+            };
+
+            if ms == 0 && seq == 0 {
+                return Err(CmdError::ZeroStreamId);
+            }
+
+            let id = StreamId { ms, seq };
+            if id > *self {
+                Ok(id)
+            } else {
+                Err(CmdError::BadStreamId)
+            }
         }
-
-        let ms: u64 = parts[0].parse().map_err(|_| CmdError::InvalidStreamId)?;
-        let seq: u64 = parts[1].parse().map_err(|_| CmdError::InvalidStreamId)?;
-
-        Ok(StreamId { ms, seq })
     }
 }
 
@@ -381,10 +407,6 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     let key = arg(&arr, 1)?;
     let entry_id = arg(&arr, 2)?;
     arg(&arr, 3)?;
-    let id: StreamId = entry_id.parse()?;
-    if let StreamId { ms: 0, seq: 0 } = id {
-        return Err(CmdError::ZeroStreamId);
-    }
 
     let mut fields = vec![];
     for i in (3..arr.len()).step_by(2) {
@@ -403,14 +425,12 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     });
     let stream = val.data.try_stream_mut()?;
 
-    if id <= stream.last_id {
-        return Err(CmdError::BadStreamId);
-    }
+    let id = stream.last_id.next_from_str(entry_id)?;
 
     stream.entries.push(StreamEntry { id, fields });
     stream.last_id = id;
 
-    Ok(entry_id.to_string().into())
+    Ok(format!("{}-{}", id.ms, id.seq).into())
 }
 
 struct Store {
