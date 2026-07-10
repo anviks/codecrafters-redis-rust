@@ -2,7 +2,6 @@ use crate::resp::{CmdError, RESPValue, decode, encode};
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
-    str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -21,42 +20,41 @@ pub(crate) struct StreamId {
 
 impl StreamId {
     fn next_from_str(&self, s: &str) -> Result<Self, CmdError> {
-        if s == "*" {
-            let ms = {
-                let millis = SystemTime::now()
+        let parts: Vec<&str> = s.split("-").collect();
+        let id = match parts[..] {
+            ["*"] => {
+                let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64;
-                self.ms.max(millis)
-            };
+                // If there's a manually created id with a higher ms value than current time, then use that
+                let ms = self.ms.max(now);
+                let seq = if self.ms == ms { self.seq + 1 } else { 0 };
+                return Ok(StreamId { ms, seq });
+            }
+            [millis, "*"] => {
+                let ms = millis.parse().map_err(|_| CmdError::InvalidStreamId)?;
+                let seq = if self.ms == ms { self.seq + 1 } else { 0 };
+                // Can never end up as 0-0 in practice, due to new streams having 0-0 as last_id
+                StreamId { ms, seq }
+            }
+            [millis, sequence] => {
+                let ms = millis.parse().map_err(|_| CmdError::InvalidStreamId)?;
+                let seq = sequence.parse().map_err(|_| CmdError::InvalidStreamId)?;
 
-            let seq = if self.ms == ms { self.seq + 1 } else { 0 };
+                if ms == 0 && seq == 0 {
+                    return Err(CmdError::ZeroStreamId);
+                }
 
-            return Ok(StreamId { ms, seq });
+                StreamId { ms, seq }
+            }
+            _ => return Err(CmdError::InvalidStreamId),
+        };
+
+        if id > *self {
+            Ok(id)
         } else {
-            let parts: Vec<&str> = s.splitn(2, "-").collect();
-            if parts.len() != 2 {
-                return Err(CmdError::InvalidStreamId);
-            }
-
-            let ms: u64 = parts[0].parse().map_err(|_| CmdError::InvalidStreamId)?;
-
-            let seq = if parts[1] == "*" {
-                if self.ms == ms { self.seq + 1 } else { 0 }
-            } else {
-                parts[1].parse().map_err(|_| CmdError::InvalidStreamId)?
-            };
-
-            if ms == 0 && seq == 0 {
-                return Err(CmdError::ZeroStreamId);
-            }
-
-            let id = StreamId { ms, seq };
-            if id > *self {
-                Ok(id)
-            } else {
-                Err(CmdError::BadStreamId)
-            }
+            Err(CmdError::BadStreamId)
         }
     }
 }
