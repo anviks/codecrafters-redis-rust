@@ -1,4 +1,4 @@
-use crate::resp::{CmdError, RESPValue, decode, encode};
+use crate::resp::{CmdError, RESPValue, array, array_of, decode, encode};
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
@@ -217,8 +217,7 @@ fn cmd_lpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 
             if arr.len() > 2 {
                 let amount = (arg_int(&arr, 2)? as usize).min(vec.len());
-                let popped: Vec<RESPValue> = vec.drain(..amount).map(RESPValue::from).collect();
-                Ok(popped.into())
+                Ok(array(vec.drain(..amount)))
             } else {
                 Ok(if vec.is_empty() {
                     RESPValue::BulkString(None)
@@ -280,7 +279,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
         Some(val) => {
             let vec = val.data.try_vec()?;
             if vec.is_empty() {
-                return Ok(vec![].into());
+                return Ok(array_of(vec![]));
             }
 
             let start: usize = {
@@ -304,17 +303,14 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
             };
 
             if start > stop || start >= vec.len() {
-                Ok(vec![].into())
+                Ok(array_of(vec![]))
             } else {
-                Ok(vec
-                    .range(start..=stop)
-                    .into_iter()
-                    .map(|s| s.clone().into())
-                    .collect::<Vec<RESPValue>>()
-                    .into())
+                Ok(array(
+                    vec.range(start..=stop).into_iter().map(|s| s.clone()),
+                ))
             }
         }
-        None => Ok(vec![].into()),
+        None => Ok(array_of(vec![])),
     }
 }
 
@@ -399,7 +395,7 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         if let Some(val) = lock.entries.get_mut(key) {
             let vec = val.data.try_vec_mut()?;
             if let Some(v) = vec.pop_front() {
-                return Ok(vec![key.to_string().into(), v.into()].into());
+                return Ok(array(vec![key.to_string(), v]));
             }
         }
 
@@ -414,13 +410,13 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     if timeout > 0.0 {
         let duration = Duration::from_secs_f64(timeout);
         Ok(match tokio::time::timeout(duration, receiver).await {
-            Ok(Ok(value)) => vec![key.to_string().into(), value.into()].into(),
+            Ok(Ok(value)) => array(vec![key.to_string(), value]),
             _ => RESPValue::Array(None),
         })
     } else {
         Ok(receiver
             .await
-            .map(|value| vec![key.to_string().into(), value.into()].into())
+            .map(|value| array(vec![key.to_string(), value]))
             .unwrap_or(RESPValue::Array(None)))
     }
 }
@@ -502,23 +498,22 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     match lock.entries.get(key) {
         Some(value) => {
             let stream = value.data.try_stream()?;
-            let entries = stream
-                .entries
-                .iter()
-                .filter(|e| start <= e.id && e.id <= end)
-                .map(|e| {
-                    vec![
-                        e.id.to_string().into(),
-                        e.fields
-                            .iter()
-                            .flat_map(|(k, v)| vec![k.clone().into(), v.clone().into()])
-                            .collect::<Vec<RESPValue>>()
-                            .into(),
-                    ]
-                    .into()
-                })
-                .collect::<Vec<RESPValue>>()
-                .into();
+            let entries = array(
+                stream
+                    .entries
+                    .iter()
+                    .filter(|e| start <= e.id && e.id <= end)
+                    .map(|e| {
+                        array(vec![
+                            e.id.to_string().into(),
+                            array(
+                                e.fields
+                                    .iter()
+                                    .flat_map(|(k, v)| vec![k.clone(), v.clone()]),
+                            ),
+                        ])
+                    }),
+            );
             Ok(entries)
         }
         None => Ok(RESPValue::BulkString(None)),

@@ -54,10 +54,16 @@ impl From<i64> for RESPValue {
     }
 }
 
-impl From<Vec<RESPValue>> for RESPValue {
-    fn from(value: Vec<RESPValue>) -> Self {
-        RESPValue::Array(Some(value))
-    }
+pub(crate) fn array<I>(items: I) -> RESPValue
+where
+    I: IntoIterator,
+    I::Item: Into<RESPValue>,
+{
+    RESPValue::Array(Some(items.into_iter().map(Into::into).collect()))
+}
+
+pub(crate) fn array_of(items: Vec<RESPValue>) -> RESPValue {
+    RESPValue::Array(Some(items))
 }
 
 impl RESPValue {
