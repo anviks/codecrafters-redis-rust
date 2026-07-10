@@ -20,6 +20,12 @@ pub(crate) struct StreamId {
     pub(crate) seq: u64,
 }
 
+impl std::fmt::Display for StreamId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}-{}", self.ms, self.seq)
+    }
+}
+
 impl FromStr for StreamId {
     type Err = CmdError;
 
@@ -457,7 +463,7 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     stream.entries.push(StreamEntry { id, fields });
     stream.last_id = id;
 
-    Ok(format!("{}-{}", id.ms, id.seq).into())
+    Ok(id.to_string().into())
 }
 
 fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
@@ -502,7 +508,7 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
                 .filter(|e| start <= e.id && e.id <= end)
                 .map(|e| {
                     vec![
-                        format!("{}-{}", e.id.ms, e.id.seq).into(),
+                        e.id.to_string().into(),
                         e.fields
                             .iter()
                             .flat_map(|(k, v)| vec![k.clone().into(), v.clone().into()])
