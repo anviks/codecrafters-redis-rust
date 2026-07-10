@@ -14,7 +14,7 @@ pub(crate) enum CmdError {
     NotDouble,
     #[error("Invalid stream ID specified as stream command argument")]
     InvalidStreamId,
-    #[error("The ID specified in XADD is equal or smaller than the target stream top item")]
+    #[error("ERR The ID specified in XADD is equal or smaller than the target stream top item")]
     BadStreamId,
     #[error("ERR wrong number of arguments for command")]
     WrongArgs,
