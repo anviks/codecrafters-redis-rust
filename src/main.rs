@@ -2,6 +2,7 @@ use crate::resp::{CmdError, RESPValue, decode, encode};
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
+    str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -12,10 +13,45 @@ use tokio::{
 };
 mod resp;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct StreamId {
+    ms: u64,
+    seq: u64,
+}
+
+impl FromStr for StreamId {
+    type Err = CmdError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.splitn(2, "-").collect();
+        if parts.len() != 2 {
+            return Err(CmdError::InvalidStreamId);
+        }
+
+        let ms: u64 = parts[0].parse().map_err(|_| CmdError::InvalidStreamId)?;
+        let seq: u64 = parts[1].parse().map_err(|_| CmdError::InvalidStreamId)?;
+
+        Ok(StreamId { ms, seq })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StreamEntry {
+    id: StreamId,
+    fields: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug)]
+struct Stream {
+    entries: Vec<StreamEntry>,
+    last_id: StreamId,
+}
+
 #[derive(Clone, Debug)]
 enum Data {
     String(String),
     List(VecDeque<String>),
+    Stream(Stream),
 }
 
 impl Data {
@@ -40,6 +76,13 @@ impl Data {
         }
     }
 
+    pub(crate) fn as_stream_mut(&mut self) -> Option<&mut Stream> {
+        match self {
+            Data::Stream(stream) => Some(stream),
+            _ => None,
+        }
+    }
+
     pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
         self.as_str().ok_or(CmdError::WrongType)
     }
@@ -50,6 +93,18 @@ impl Data {
 
     pub(crate) fn try_vec_mut(&mut self) -> Result<&mut VecDeque<String>, CmdError> {
         self.as_vec_mut().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_stream_mut(&mut self) -> Result<&mut Stream, CmdError> {
+        self.as_stream_mut().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            Data::String(_) => "string",
+            Data::List(_) => "list",
+            Data::Stream(_) => "stream",
+        }
     }
 }
 
@@ -165,6 +220,9 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     match lock.entries.get(key) {
         Some(val) => {
             let vec = val.data.try_vec()?;
+            if vec.is_empty() {
+                return Ok(vec![].into());
+            }
 
             let start: usize = {
                 let s = arg_int(&arr, 2)?;
@@ -287,10 +345,10 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         }
 
         let (sender, receiver) = oneshot::channel();
-
-        let waiter = lock.waiters.entry(key.to_string()).or_insert(vec![].into());
-        waiter.push_back(sender);
-
+        lock.waiters
+            .entry(key.to_string())
+            .or_default()
+            .push_back(sender);
         receiver
     };
 
@@ -314,12 +372,38 @@ fn cmd_type(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
         Some(Value {
             data: value,
             expires_at: _,
-        }) => match value {
-            Data::String(_) => RESPValue::SimpleString("string".to_string()),
-            _ => RESPValue::SimpleString("none".to_string()),
-        },
+        }) => RESPValue::SimpleString(value.type_name().to_string()),
         None => RESPValue::SimpleString("none".to_string()),
     })
+}
+
+fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg(&arr, 1)?;
+    let entry_id = arg(&arr, 2)?;
+    arg(&arr, 3)?;
+    let id: StreamId = entry_id.parse()?;
+
+    let mut fields = vec![];
+    for i in (3..arr.len()).step_by(2) {
+        let field = arg(&arr, i)?.to_string();
+        let value = arg(&arr, i + 1)?.to_string();
+        fields.push((field, value));
+    }
+
+    let mut lock = store.lock().unwrap();
+    let val = lock.entries.entry(key.to_string()).or_insert(Value {
+        data: Data::Stream(Stream {
+            entries: vec![],
+            last_id: StreamId { ms: 0, seq: 0 },
+        }),
+        expires_at: None,
+    });
+    let stream = val.data.try_stream_mut()?;
+
+    stream.entries.push(StreamEntry { id, fields });
+    stream.last_id = id;
+
+    Ok(entry_id.to_string().into())
 }
 
 struct Store {
@@ -369,6 +453,7 @@ async fn main() {
                                         "lrange" => cmd_lrange(&arr, &loc_store),
                                         "blpop" => cmd_blpop(&arr, &loc_store).await,
                                         "type" => cmd_type(&arr, &loc_store),
+                                        "xadd" => cmd_xadd(&arr, &loc_store),
                                         _ => Err(CmdError::Unknown),
                                     };
 

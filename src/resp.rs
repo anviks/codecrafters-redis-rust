@@ -12,6 +12,8 @@ pub(crate) enum CmdError {
     NotUint,
     #[error("value is not a double or out of range")]
     NotDouble,
+    #[error("Invalid stream ID specified as stream command argument")]
+    InvalidStreamId,
     #[error("ERR wrong number of arguments for command")]
     WrongArgs,
     #[error("ERR unknown command")]
