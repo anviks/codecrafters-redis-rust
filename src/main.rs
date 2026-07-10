@@ -14,9 +14,9 @@ use tokio::{
 mod resp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct StreamId {
-    ms: u64,
-    seq: u64,
+pub(crate) struct StreamId {
+    pub(crate) ms: u64,
+    pub(crate) seq: u64,
 }
 
 impl FromStr for StreamId {
@@ -382,6 +382,9 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     let entry_id = arg(&arr, 2)?;
     arg(&arr, 3)?;
     let id: StreamId = entry_id.parse()?;
+    if let StreamId { ms: 0, seq: 0 } = id {
+        return Err(CmdError::ZeroStreamId);
+    }
 
     let mut fields = vec![];
     for i in (3..arr.len()).step_by(2) {

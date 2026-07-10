@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -16,6 +14,8 @@ pub(crate) enum CmdError {
     InvalidStreamId,
     #[error("ERR The ID specified in XADD is equal or smaller than the target stream top item")]
     BadStreamId,
+    #[error("ERR The ID specified in XADD must be greater than 0-0")]
+    ZeroStreamId,
     #[error("ERR wrong number of arguments for command")]
     WrongArgs,
     #[error("ERR unknown command")]
