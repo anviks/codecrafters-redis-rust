@@ -520,6 +520,55 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     }
 }
 
+fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let mut i = 1;
+    loop {
+        let argument = arg(&arr, i)?;
+        i += 1;
+        if argument.to_lowercase() == "streams" {
+            break;
+        }
+    }
+
+    let arg_count = arr.len() - i;
+    if arg_count == 0 || arg_count % 2 == 1 {
+        return Err(CmdError::WrongArgs);
+    }
+    let pair_count = arg_count / 2;
+    let stream_keys = &arr[i..i + pair_count];
+    let stream_ids = &arr[i + pair_count..];
+
+    let mut result = vec![];
+    let lock = store.lock().unwrap();
+
+    for (resp_key, resp_id) in stream_keys.iter().zip(stream_ids) {
+        let key = resp_key.try_str()?;
+        let id: StreamId = resp_id.try_str()?.parse()?;
+
+        match lock.entries.get(key) {
+            Some(value) => {
+                let stream = value.data.try_stream()?;
+                result.push(array(vec![
+                    resp_key.clone(),
+                    array(stream.entries.iter().filter(|e| id < e.id).map(|e| {
+                        array(vec![
+                            e.id.to_string().into(),
+                            array(
+                                e.fields
+                                    .iter()
+                                    .flat_map(|(k, v)| vec![k.clone(), v.clone()]),
+                            ),
+                        ])
+                    })),
+                ]));
+            }
+            None => continue,
+        };
+    }
+
+    Ok(array(result))
+}
+
 struct Store {
     entries: HashMap<String, Value>,
     waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
@@ -569,6 +618,7 @@ async fn main() {
                                         "type" => cmd_type(&arr, &loc_store),
                                         "xadd" => cmd_xadd(&arr, &loc_store),
                                         "xrange" => cmd_xrange(&arr, &loc_store),
+                                        "xread" => cmd_xread(&arr, &loc_store),
                                         _ => Err(CmdError::Unknown),
                                     };
 
