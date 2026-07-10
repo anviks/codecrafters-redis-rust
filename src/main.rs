@@ -5,6 +5,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    u64,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -463,7 +464,9 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     let key = arg(&arr, 1)?;
     let start = {
         let s = arg(&arr, 2)?;
-        if s.contains("-") {
+        if s == "-" {
+            StreamId { ms: 0, seq: 0 }
+        } else if s.contains("-") {
             s.parse()?
         } else {
             StreamId {
@@ -474,7 +477,12 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     };
     let end = {
         let s = arg(&arr, 3)?;
-        if s.contains("-") {
+        if s == "+" {
+            StreamId {
+                ms: u64::MAX,
+                seq: u64::MAX,
+            }
+        } else if s.contains("-") {
             s.parse()?
         } else {
             StreamId {
