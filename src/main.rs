@@ -565,6 +565,33 @@ fn filter_stream_entries(
     Ok(result)
 }
 
+async fn xread_worker(
+    store: &SharedStore,
+    stream_keys: &Vec<String>,
+    stream_ids: &Vec<StreamId>,
+) -> Result<RESPValue, CmdError> {
+    loop {
+        let receiver = {
+            let mut lock = store.lock().unwrap();
+            let result = filter_stream_entries(&lock, stream_keys, stream_ids)?;
+            if !result.is_empty() {
+                return Ok(array(result));
+            }
+
+            let (sender, receiver) = oneshot::channel();
+            let waiter_id = lock.add_xread_waiter(sender);
+
+            for key in stream_keys {
+                lock.add_key_for_xread_waiter(key.clone(), waiter_id);
+            }
+
+            receiver
+        };
+
+        receiver.await.ok();
+    }
+}
+
 async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let mut block_arg = None;
     let mut i = 1;
@@ -612,36 +639,20 @@ async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         block_ms
     };
 
-    let work = async {
-        loop {
-            let receiver = {
-                let mut lock = store.lock().unwrap();
-                let result = filter_stream_entries(&lock, &stream_keys, &stream_ids)?;
-                if !result.is_empty() {
-                    return Ok::<RESPValue, CmdError>(array(result));
-                }
-
-                let (sender, receiver) = oneshot::channel();
-                let waiter_id = lock.add_xread_waiter(sender);
-
-                for key in &stream_keys {
-                    lock.add_key_for_xread_waiter(key.clone(), waiter_id);
-                }
-
-                receiver
-            };
-            receiver.await.ok();
-        }
-    };
-
     if block_ms > 0 {
         let duration = Duration::from_millis(block_ms);
-        Ok(match tokio::time::timeout(duration, work).await {
-            Ok(Ok(value)) => value,
-            _ => RESPValue::Array(None),
-        })
+        Ok(
+            match tokio::time::timeout(duration, xread_worker(store, &stream_keys, &stream_ids))
+                .await
+            {
+                Ok(Ok(value)) => value,
+                _ => RESPValue::Array(None),
+            },
+        )
     } else {
-        Ok(work.await.unwrap_or(RESPValue::Array(None)))
+        Ok(xread_worker(store, &stream_keys, &stream_ids)
+            .await
+            .unwrap_or(RESPValue::Array(None)))
     }
 }
 
