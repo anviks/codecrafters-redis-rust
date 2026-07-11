@@ -538,9 +538,11 @@ fn filter_stream_entries(
         match lock.entries.get(key) {
             Some(value) => {
                 let stream = value.data.try_stream()?;
-                result.push(array(vec![
-                    key.clone().into(),
-                    array(stream.entries.iter().filter(|e| *id < e.id).map(|e| {
+                let filtered: Vec<RESPValue> = stream
+                    .entries
+                    .iter()
+                    .filter(|e| *id < e.id)
+                    .map(|e| {
                         array(vec![
                             e.id.to_string().into(),
                             array(
@@ -549,8 +551,12 @@ fn filter_stream_entries(
                                     .flat_map(|(k, v)| vec![k.clone(), v.clone()]),
                             ),
                         ])
-                    })),
-                ]));
+                    })
+                    .collect();
+                if filtered.is_empty() {
+                    continue;
+                }
+                result.push(array(vec![key.clone().into(), array(filtered)]));
             }
             None => continue,
         };
