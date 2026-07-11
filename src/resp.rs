@@ -72,6 +72,13 @@ pub(crate) fn array_of(items: Vec<RESPValue>) -> RESPValue {
     RESPValue::Array(Some(items))
 }
 
+pub(crate) fn resp_result(result: Result<RESPValue, CmdError>) -> RESPValue {
+    match result {
+        Ok(v) => v,
+        Err(e) => RESPValue::SimpleError(e.to_string()),
+    }
+}
+
 impl RESPValue {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {

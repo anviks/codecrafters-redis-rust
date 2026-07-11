@@ -1,5 +1,5 @@
 use crate::{
-    resp::{CmdError, RESPValue, array, array_of, decode, encode},
+    resp::{CmdError, RESPValue, array, array_of, decode, encode, resp_result},
     stream::{Stream, StreamEntry, StreamId},
 };
 use std::{
@@ -712,14 +712,9 @@ async fn main() {
                                         } else {
                                             let mut results = vec![];
                                             for (cmd, argv) in &cmd_queue {
-                                                let res =
-                                                    execute_command(cmd, argv, &loc_store).await;
-                                                results.push(match res {
-                                                    Ok(val) => val,
-                                                    Err(err) => {
-                                                        RESPValue::SimpleError(err.to_string())
-                                                    }
-                                                });
+                                                results.push(resp_result(
+                                                    execute_command(cmd, argv, &loc_store).await,
+                                                ));
                                             }
 
                                             cmd_queue.clear();
@@ -735,7 +730,7 @@ async fn main() {
                                             in_transaction = true;
                                             Ok(RESPValue::SimpleString("OK".to_string()))
                                         }
-                                    },
+                                    }
                                     "discard" => {
                                         if !in_transaction {
                                             Err(CmdError::DiscardWithoutMulti)
@@ -752,11 +747,7 @@ async fn main() {
                                     _ => execute_command(&cmd, &argv, &loc_store).await,
                                 };
 
-                                let output = match result {
-                                    Ok(val) => encode(&val),
-                                    Err(err) => encode(&RESPValue::SimpleError(err.to_string())),
-                                };
-
+                                let output = encode(&resp_result(result));
                                 if stream.write_all(&output).await.is_err() {
                                     break;
                                 }
