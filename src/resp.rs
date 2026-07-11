@@ -16,6 +16,10 @@ pub(crate) enum CmdError {
     BadStreamId,
     #[error("ERR The ID specified in XADD must be greater than 0-0")]
     ZeroStreamId,
+    #[error("ERR EXEC without MULTI")]
+    ExecWithoutMulti,
+    #[error("ERR MULTI calls can not be nested")]
+    NestedMulti,
     #[error("ERR wrong number of arguments for command")]
     WrongArgs,
     #[error("ERR unknown command")]
@@ -74,30 +78,8 @@ impl RESPValue {
         }
     }
 
-    pub(crate) fn as_vec(&self) -> Option<&Vec<RESPValue>> {
-        match self {
-            RESPValue::Array(Some(vec)) => Some(vec),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut Vec<RESPValue>> {
-        match self {
-            RESPValue::Array(Some(vec)) => Some(vec),
-            _ => None,
-        }
-    }
-
     pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
         self.as_str().ok_or(CmdError::WrongType)
-    }
-
-    pub(crate) fn try_vec(&self) -> Result<&Vec<RESPValue>, CmdError> {
-        self.as_vec().ok_or(CmdError::WrongType)
-    }
-
-    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut Vec<RESPValue>, CmdError> {
-        self.as_vec_mut().ok_or(CmdError::WrongType)
     }
 }
 

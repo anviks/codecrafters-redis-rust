@@ -612,6 +612,31 @@ fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     Ok(RESPValue::Integer(new_num))
 }
 
+async fn execute_command(
+    command: &str,
+    arr: &[RESPValue],
+    store: &SharedStore,
+) -> Result<RESPValue, CmdError> {
+    match command {
+        "ping" => Ok(RESPValue::SimpleString("PONG".to_string())),
+        "echo" if arr.len() > 1 => Ok(arr[1].clone()),
+        "get" => cmd_get(&arr, &store),
+        "set" => cmd_set(&arr, &store),
+        "rpush" => cmd_rpush(&arr, &store),
+        "lpush" => cmd_lpush(&arr, &store),
+        "lpop" => cmd_lpop(&arr, &store),
+        "llen" => cmd_llen(&arr, &store),
+        "lrange" => cmd_lrange(&arr, &store),
+        "blpop" => cmd_blpop(&arr, &store).await,
+        "type" => cmd_type(&arr, &store),
+        "xadd" => cmd_xadd(&arr, &store),
+        "xrange" => cmd_xrange(&arr, &store),
+        "xread" => cmd_xread(&arr, &store).await,
+        "incr" => cmd_incr(&arr, &store),
+        _ => Err(CmdError::Unknown),
+    }
+}
+
 struct Store {
     entries: HashMap<String, Value>,
     blpop_waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
@@ -658,6 +683,9 @@ async fn main() {
             Ok((mut stream, _)) => {
                 let loc_store = Arc::clone(&store);
                 tokio::spawn(async move {
+                    let mut cmd_queue: Vec<(String, Vec<RESPValue>)> = vec![];
+                    let mut in_transaction = false;
+
                     loop {
                         let mut buf = [0; 512];
                         match stream.read(&mut buf).await {
@@ -665,43 +693,63 @@ async fn main() {
                             Ok(n) => {
                                 let parsed = decode(&buf[..n]);
 
-                                if let RESPValue::Array(array) = parsed
-                                    && let Some(arr) = array
-                                    && !arr.is_empty()
-                                    && let Some(cmd) = arr[0].as_str()
-                                {
-                                    let response: Result<RESPValue, CmdError> = match cmd
-                                        .to_lowercase()
-                                        .as_str()
+                                let (cmd, argv) = {
+                                    if let RESPValue::Array(array) = parsed
+                                        && let Some(arr) = array
+                                        && !arr.is_empty()
+                                        && let Some(command) = arr[0].as_str()
                                     {
-                                        "ping" => Ok(RESPValue::SimpleString("PONG".to_string())),
-                                        "echo" if arr.len() > 1 => Ok(arr[1].clone()),
-                                        "get" => cmd_get(&arr, &loc_store),
-                                        "set" => cmd_set(&arr, &loc_store),
-                                        "rpush" => cmd_rpush(&arr, &loc_store),
-                                        "lpush" => cmd_lpush(&arr, &loc_store),
-                                        "lpop" => cmd_lpop(&arr, &loc_store),
-                                        "llen" => cmd_llen(&arr, &loc_store),
-                                        "lrange" => cmd_lrange(&arr, &loc_store),
-                                        "blpop" => cmd_blpop(&arr, &loc_store).await,
-                                        "type" => cmd_type(&arr, &loc_store),
-                                        "xadd" => cmd_xadd(&arr, &loc_store),
-                                        "xrange" => cmd_xrange(&arr, &loc_store),
-                                        "xread" => cmd_xread(&arr, &loc_store).await,
-                                        "incr" => cmd_incr(&arr, &loc_store),
-                                        _ => Err(CmdError::Unknown),
-                                    };
-
-                                    let output = match response {
-                                        Ok(val) => encode(&val),
-                                        Err(err) => {
-                                            encode(&RESPValue::SimpleError(format!("{}", err)))
-                                        }
-                                    };
-
-                                    if stream.write_all(&output).await.is_err() {
-                                        break;
+                                        (command.to_lowercase(), arr)
+                                    } else {
+                                        continue;
                                     }
+                                };
+
+                                let result: Result<RESPValue, CmdError> = match cmd.as_str() {
+                                    "exec" => {
+                                        if !in_transaction {
+                                            Err(CmdError::ExecWithoutMulti)
+                                        } else {
+                                            let mut results = vec![];
+                                            for (cmd, argv) in &cmd_queue {
+                                                let res =
+                                                    execute_command(cmd, argv, &loc_store).await;
+                                                results.push(match res {
+                                                    Ok(val) => val,
+                                                    Err(err) => {
+                                                        RESPValue::SimpleError(err.to_string())
+                                                    }
+                                                });
+                                            }
+
+                                            cmd_queue.clear();
+                                            in_transaction = false;
+
+                                            Ok(array(results))
+                                        }
+                                    }
+                                    "multi" => {
+                                        if in_transaction {
+                                            Err(CmdError::NestedMulti)
+                                        } else {
+                                            in_transaction = true;
+                                            Ok(RESPValue::SimpleString("OK".to_string()))
+                                        }
+                                    }
+                                    _ if in_transaction => {
+                                        cmd_queue.push((cmd, argv));
+                                        Ok(RESPValue::SimpleString("QUEUED".to_string()))
+                                    }
+                                    _ => execute_command(&cmd, &argv, &loc_store).await,
+                                };
+
+                                let output = match result {
+                                    Ok(val) => encode(&val),
+                                    Err(err) => encode(&RESPValue::SimpleError(err.to_string())),
+                                };
+
+                                if stream.write_all(&output).await.is_err() {
+                                    break;
                                 }
                             }
                             Err(_) => break,
