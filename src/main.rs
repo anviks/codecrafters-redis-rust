@@ -1,4 +1,7 @@
-use crate::{resp::{CmdError, RESPValue, array, array_of, decode, encode}, stream::{Stream, StreamEntry, StreamId}};
+use crate::{
+    resp::{CmdError, RESPValue, array, array_of, decode, encode},
+    stream::{Stream, StreamEntry, StreamId},
+};
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
@@ -541,7 +544,20 @@ async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         .collect::<Result<Vec<String>, CmdError>>()?;
     let stream_ids = arr[i + pair_count..]
         .iter()
-        .map(|id| id.try_str().and_then(StreamId::from_str))
+        .enumerate()
+        .map(|(index, id)| {
+            id.try_str().and_then(|s| {
+                if s == "$" {
+                    let lock = store.lock().unwrap();
+                    match lock.entries.get(&stream_keys[index]) {
+                        Some(val) => Ok(val.data.try_stream()?.last_id),
+                        None => Ok(StreamId { ms: 0, seq: 0 }),
+                    }
+                } else {
+                    s.parse()
+                }
+            })
+        })
         .collect::<Result<Vec<StreamId>, CmdError>>()?;
 
     let block_ms = {
