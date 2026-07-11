@@ -347,7 +347,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
     let mut sent_values = 0;
     let mut lock = store.lock().unwrap();
 
-    if let Some(waiters) = lock.waiters.get_mut(key) {
+    if let Some(waiters) = lock.blpop_waiters.get_mut(key) {
         while let Some(val) = values.pop_front() {
             let Some(w) = waiters.pop_front() else {
                 values.push_front(val);
@@ -400,7 +400,7 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         }
 
         let (sender, receiver) = oneshot::channel();
-        lock.waiters
+        lock.blpop_waiters
             .entry(key.to_string())
             .or_default()
             .push_back(sender);
@@ -458,6 +458,14 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 
     stream.entries.push(StreamEntry { id, fields });
     stream.last_id = id;
+
+    if let Some(waiter_ids) = lock.xread_waiters_by_key.get(key) {
+        for w_id in waiter_ids.clone() {
+            if let Some(waiter) = lock.xread_waiters.remove(&w_id) {
+                waiter.send(()).ok();
+            }
+        }
+    }
 
     Ok(id.to_string().into())
 }
@@ -520,37 +528,19 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     }
 }
 
-fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let mut i = 1;
-    loop {
-        let argument = arg(&arr, i)?;
-        i += 1;
-        if argument.to_lowercase() == "streams" {
-            break;
-        }
-    }
-
-    let arg_count = arr.len() - i;
-    if arg_count == 0 || arg_count % 2 == 1 {
-        return Err(CmdError::WrongArgs);
-    }
-    let pair_count = arg_count / 2;
-    let stream_keys = &arr[i..i + pair_count];
-    let stream_ids = &arr[i + pair_count..];
-
+fn filter_stream_entries(
+    lock: &Store,
+    stream_keys: &Vec<String>,
+    stream_ids: &Vec<StreamId>,
+) -> Result<Vec<RESPValue>, CmdError> {
     let mut result = vec![];
-    let lock = store.lock().unwrap();
-
-    for (resp_key, resp_id) in stream_keys.iter().zip(stream_ids) {
-        let key = resp_key.try_str()?;
-        let id: StreamId = resp_id.try_str()?.parse()?;
-
+    for (key, id) in stream_keys.iter().zip(stream_ids) {
         match lock.entries.get(key) {
             Some(value) => {
                 let stream = value.data.try_stream()?;
                 result.push(array(vec![
-                    resp_key.clone(),
-                    array(stream.entries.iter().filter(|e| id < e.id).map(|e| {
+                    key.clone().into(),
+                    array(stream.entries.iter().filter(|e| *id < e.id).map(|e| {
                         array(vec![
                             e.id.to_string().into(),
                             array(
@@ -566,21 +556,128 @@ fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
         };
     }
 
-    Ok(array(result))
+    Ok(result)
+}
+
+async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let mut block_arg = None;
+    let mut i = 1;
+    loop {
+        let argument = arg(&arr, i)?;
+        i += 1;
+        match argument.to_lowercase().as_str() {
+            "streams" => {
+                break;
+            }
+            "block" => {
+                block_arg = Some(arg_uint(&arr, i)?);
+                i += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let arg_count = arr.len() - i;
+    if arg_count == 0 || arg_count % 2 == 1 {
+        return Err(CmdError::WrongArgs);
+    }
+    let pair_count = arg_count / 2;
+    let stream_keys = arr[i..i + pair_count]
+        .iter()
+        .map(|k| k.try_str().map(str::to_string))
+        .collect::<Result<Vec<String>, CmdError>>()?;
+    let stream_ids = arr[i + pair_count..]
+        .iter()
+        .map(|id| id.try_str().and_then(StreamId::from_str))
+        .collect::<Result<Vec<StreamId>, CmdError>>()?;
+
+    let block_ms = {
+        let lock = store.lock().unwrap();
+        let result = filter_stream_entries(&lock, &stream_keys, &stream_ids)?;
+
+        if !result.is_empty() {
+            return Ok(array(result));
+        }
+
+        let Some(block_ms) = block_arg else {
+            return Ok(array(result));
+        };
+
+        block_ms
+    };
+
+    let work = async {
+        loop {
+            let receiver = {
+                let mut lock = store.lock().unwrap();
+                let result = filter_stream_entries(&lock, &stream_keys, &stream_ids)?;
+                if !result.is_empty() {
+                    return Ok::<RESPValue, CmdError>(array(result));
+                }
+
+                let (sender, receiver) = oneshot::channel();
+                let waiter_id = lock.add_xread_waiter(sender);
+
+                for key in &stream_keys {
+                    lock.add_key_for_xread_waiter(key.clone(), waiter_id);
+                }
+
+                receiver
+            };
+            receiver.await.ok();
+        }
+    };
+
+    if block_ms > 0 {
+        let duration = Duration::from_millis(block_ms);
+        Ok(match tokio::time::timeout(duration, work).await {
+            Ok(Ok(value)) => value,
+            _ => RESPValue::Array(None),
+        })
+    } else {
+        Ok(work.await.unwrap_or(RESPValue::Array(None)))
+    }
 }
 
 struct Store {
     entries: HashMap<String, Value>,
-    waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
+    blpop_waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
+    xread_waiters: HashMap<u64, oneshot::Sender<()>>,
+    xread_waiters_by_key: HashMap<String, VecDeque<u64>>,
+    next_id: u64,
 }
+
+impl Store {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            blpop_waiters: HashMap::new(),
+            xread_waiters: HashMap::new(),
+            xread_waiters_by_key: HashMap::new(),
+            next_id: 1,
+        }
+    }
+
+    fn add_xread_waiter(&mut self, waiter: oneshot::Sender<()>) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.xread_waiters.insert(id, waiter);
+        id
+    }
+
+    fn add_key_for_xread_waiter(&mut self, key: String, waiter_id: u64) {
+        self.xread_waiters_by_key
+            .entry(key)
+            .or_default()
+            .push_back(waiter_id);
+    }
+}
+
 type SharedStore = Arc<Mutex<Store>>;
 
 #[tokio::main]
 async fn main() {
-    let store: SharedStore = Arc::new(Mutex::new(Store {
-        entries: HashMap::new(),
-        waiters: HashMap::new(),
-    }));
+    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
 
     loop {
@@ -618,7 +715,7 @@ async fn main() {
                                         "type" => cmd_type(&arr, &loc_store),
                                         "xadd" => cmd_xadd(&arr, &loc_store),
                                         "xrange" => cmd_xrange(&arr, &loc_store),
-                                        "xread" => cmd_xread(&arr, &loc_store),
+                                        "xread" => cmd_xread(&arr, &loc_store).await,
                                         _ => Err(CmdError::Unknown),
                                     };
 
