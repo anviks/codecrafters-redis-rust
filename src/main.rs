@@ -664,7 +664,6 @@ async fn main() {
                             Ok(0) => break,
                             Ok(n) => {
                                 let parsed = decode(&buf[..n]);
-                                println!("{:?}", parsed);
 
                                 if let RESPValue::Array(array) = parsed
                                     && let Some(arr) = array

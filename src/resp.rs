@@ -4,11 +4,11 @@ use thiserror::Error;
 pub(crate) enum CmdError {
     #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
     WrongType,
-    #[error("value is not an integer or out of range")]
+    #[error("ERR value is not an integer or out of range")]
     NotInt,
-    #[error("value is not an integer or out of range")]
+    #[error("ERR value is not an integer or out of range")]
     NotUint,
-    #[error("value is not a double or out of range")]
+    #[error("ERR value is not a double or out of range")]
     NotDouble,
     #[error("Invalid stream ID specified as stream command argument")]
     InvalidStreamId,
