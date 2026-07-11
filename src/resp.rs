@@ -18,6 +18,8 @@ pub(crate) enum CmdError {
     ZeroStreamId,
     #[error("ERR EXEC without MULTI")]
     ExecWithoutMulti,
+    #[error("ERR DISCARD without MULTI")]
+    DiscardWithoutMulti,
     #[error("ERR MULTI calls can not be nested")]
     NestedMulti,
     #[error("ERR wrong number of arguments for command")]

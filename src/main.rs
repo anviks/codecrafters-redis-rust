@@ -735,6 +735,15 @@ async fn main() {
                                             in_transaction = true;
                                             Ok(RESPValue::SimpleString("OK".to_string()))
                                         }
+                                    },
+                                    "discard" => {
+                                        if !in_transaction {
+                                            Err(CmdError::DiscardWithoutMulti)
+                                        } else {
+                                            in_transaction = false;
+                                            cmd_queue.clear();
+                                            Ok(RESPValue::SimpleString("OK".to_string()))
+                                        }
                                     }
                                     _ if in_transaction => {
                                         cmd_queue.push((cmd, argv));
