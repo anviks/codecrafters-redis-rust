@@ -612,10 +612,41 @@ fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     Ok(RESPValue::Integer(new_num))
 }
 
+fn cmd_info(arr: &[RESPValue], store: &SharedStore, args: &Args) -> Result<RESPValue, CmdError> {
+    let mut sections = HashMap::new();
+    let role = if args.replicaof.is_some() {
+        "slave"
+    } else {
+        "master"
+    };
+    sections.insert(
+        "replication".to_string(),
+        format!(
+            "# Replication\nrole:{}\nconnected_slaves:0\nmaster_replid:0\nmaster_repl_offset:0\n",
+            role
+        ),
+    );
+
+    if let Ok(s) = arg(&arr, 1) {
+        match sections.get(&s.to_lowercase()) {
+            Some(section) => Ok(section.to_string().into()),
+            None => todo!(),
+        }
+    } else {
+        Ok(sections
+            .values()
+            .map(String::clone)
+            .collect::<Vec<String>>()
+            .join("\n\n")
+            .into())
+    }
+}
+
 async fn execute_command(
     command: &str,
     arr: &[RESPValue],
     store: &SharedStore,
+    args: &Args,
 ) -> Result<RESPValue, CmdError> {
     match command {
         "ping" => Ok(RESPValue::SimpleString("PONG".to_string())),
@@ -633,6 +664,7 @@ async fn execute_command(
         "xrange" => cmd_xrange(&arr, &store),
         "xread" => cmd_xread(&arr, &store).await,
         "incr" => cmd_incr(&arr, &store),
+        "info" => cmd_info(&arr, &store, &args),
         _ => Err(CmdError::Unknown),
     }
 }
@@ -673,10 +705,13 @@ impl Store {
 
 type SharedStore = Arc<Mutex<Store>>;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 struct Args {
     #[arg(long, default_value_t = 6379)]
     port: u16,
+
+    #[arg(long)]
+    replicaof: Option<String>,
 }
 
 #[tokio::main]
@@ -692,6 +727,7 @@ async fn main() {
         match listener.accept().await {
             Ok((mut stream, _)) => {
                 let loc_store = Arc::clone(&store);
+                let args = args.clone();
                 tokio::spawn(async move {
                     let mut cmd_queue: Vec<(String, Vec<RESPValue>)> = vec![];
                     let mut in_transaction = false;
@@ -723,7 +759,7 @@ async fn main() {
                                             let mut results = vec![];
                                             for (cmd, argv) in &cmd_queue {
                                                 results.push(resp_result(
-                                                    execute_command(cmd, argv, &loc_store).await,
+                                                    execute_command(cmd, argv, &loc_store, &args).await,
                                                 ));
                                             }
 
@@ -754,7 +790,7 @@ async fn main() {
                                         cmd_queue.push((cmd, argv));
                                         Ok(RESPValue::SimpleString("QUEUED".to_string()))
                                     }
-                                    _ => execute_command(&cmd, &argv, &loc_store).await,
+                                    _ => execute_command(&cmd, &argv, &loc_store, &args).await,
                                 };
 
                                 let output = encode(&resp_result(result));
