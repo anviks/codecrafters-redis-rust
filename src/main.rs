@@ -2,12 +2,12 @@ use crate::{
     resp::{CmdError, RESPValue, array, array_of, decode, encode, resp_result},
     stream::{Stream, StreamEntry, StreamId},
 };
+use clap::Parser;
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
-    str::FromStr,
     sync::{Arc, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
     u64,
 };
 use tokio::{
@@ -673,10 +673,20 @@ impl Store {
 
 type SharedStore = Arc<Mutex<Store>>;
 
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(long, default_value_t = 6379)]
+    port: u16,
+}
+
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
     let store: SharedStore = Arc::new(Mutex::new(Store::new()));
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
+        .await
+        .unwrap();
 
     loop {
         match listener.accept().await {
