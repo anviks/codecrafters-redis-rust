@@ -592,6 +592,26 @@ async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     }
 }
 
+fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg(&arr, 1)?;
+    let mut lock = store.lock().unwrap();
+
+    let value = lock.entries.entry(key.to_string()).or_insert(Value {
+        data: Data::String("0".to_string()),
+        expires_at: None,
+    });
+
+    let new_num: i64 = value
+        .data
+        .try_str()?
+        .parse::<i64>()
+        .map_err(|_| CmdError::NotInt)?
+        + 1;
+    value.data = Data::String(new_num.to_string());
+
+    Ok(RESPValue::Integer(new_num))
+}
+
 struct Store {
     entries: HashMap<String, Value>,
     blpop_waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
@@ -669,6 +689,7 @@ async fn main() {
                                         "xadd" => cmd_xadd(&arr, &loc_store),
                                         "xrange" => cmd_xrange(&arr, &loc_store),
                                         "xread" => cmd_xread(&arr, &loc_store).await,
+                                        "incr" => cmd_incr(&arr, &loc_store),
                                         _ => Err(CmdError::Unknown),
                                     };
 
