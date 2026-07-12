@@ -665,7 +665,23 @@ async fn execute_command(
         "xread" => cmd_xread(&arr, &store).await,
         "incr" => cmd_incr(&arr, &store),
         "info" => cmd_info(&arr, &store, &args),
+        "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
+        "psync" => Ok(RESPValue::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".to_string())),
         _ => Err(CmdError::Unknown),
+    }
+}
+
+async fn communicate(stream: &mut TcpStream, message: &RESPValue) {
+    stream.write_all(&encode(message)).await.ok();
+
+    let mut buf = [0; 512];
+    match stream.read(&mut buf).await {
+        Ok(0) => {}
+        Ok(n) => {
+            let parsed = decode(&buf[..n]);
+            println!("{parsed:?}");
+        }
+        Err(_) => {}
     }
 }
 
@@ -724,12 +740,42 @@ async fn main() {
     let master_addr = args.replicaof.as_ref().map(|s| s.replace(" ", ":"));
     if let Some(addr) = master_addr {
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(&encode(&array(vec![RESPValue::BulkString(Some(
-                "PING".to_string(),
-            ))])))
-            .await
-            .ok();
+
+        communicate(
+            &mut stream,
+            &array(vec![RESPValue::BulkString(Some("PING".to_string()))]),
+        )
+        .await;
+
+        communicate(
+            &mut stream,
+            &array(vec![
+                "REPLCONF".to_string(),
+                "listening-port".to_string(),
+                args.port.to_string(),
+            ]),
+        )
+        .await;
+
+        communicate(
+            &mut stream,
+            &array(vec![
+                "REPLCONF".to_string(),
+                "capa".to_string(),
+                "psync2".to_string(),
+            ]),
+        )
+        .await;
+
+        communicate(
+            &mut stream,
+            &array(vec![
+                "PSYNC".to_string(),
+                "?".to_string(),
+                "-1".to_string(),
+            ]),
+        )
+        .await;
     }
 
     let store: SharedStore = Arc::new(Mutex::new(Store::new()));
