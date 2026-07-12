@@ -5,6 +5,7 @@ use crate::{
 use clap::Parser;
 use std::{
     collections::{HashMap, VecDeque},
+    fs,
     ops::Add,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -12,7 +13,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpSocket, TcpStream},
+    net::{TcpListener, TcpStream},
     sync::oneshot,
 };
 mod resp;
@@ -847,7 +848,11 @@ async fn main() {
                                         );
                                         let output = encode(&resp);
                                         stream.write_all(&output).await.ok();
-                                        stream.write_all("$0\r\n".as_bytes()).await.ok();
+                                        let empty_rdb = fs::read("empty.rdb").unwrap();
+                                        let mut output =
+                                            format!("${}\r\n", empty_rdb.len()).as_bytes().to_vec();
+                                        output.extend(empty_rdb);
+                                        stream.write_all(&output).await.ok();
                                         continue;
                                     }
                                     _ if in_transaction => {
