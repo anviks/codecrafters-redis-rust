@@ -666,7 +666,6 @@ async fn execute_command(
         "incr" => cmd_incr(&arr, &store),
         "info" => cmd_info(&arr, &store, &args),
         "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
-        "psync" => Ok(RESPValue::SimpleString("FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0".to_string())),
         _ => Err(CmdError::Unknown),
     }
 }
@@ -769,11 +768,7 @@ async fn main() {
 
         communicate(
             &mut stream,
-            &array(vec![
-                "PSYNC".to_string(),
-                "?".to_string(),
-                "-1".to_string(),
-            ]),
+            &array(vec!["PSYNC".to_string(), "?".to_string(), "-1".to_string()]),
         )
         .await;
     }
@@ -844,6 +839,16 @@ async fn main() {
                                             cmd_queue.clear();
                                             Ok(RESPValue::SimpleString("OK".to_string()))
                                         }
+                                    }
+                                    "psync" => {
+                                        let resp = RESPValue::SimpleString(
+                                            "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
+                                                .to_string(),
+                                        );
+                                        let output = encode(&resp);
+                                        stream.write_all(&output).await.ok();
+                                        stream.write_all("$0\r\n".as_bytes()).await.ok();
+                                        continue;
                                     }
                                     _ if in_transaction => {
                                         cmd_queue.push((cmd, argv));
