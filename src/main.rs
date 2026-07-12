@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
+    net::{TcpListener, TcpSocket, TcpStream},
     sync::oneshot,
 };
 mod resp;
@@ -622,7 +622,7 @@ fn cmd_info(arr: &[RESPValue], store: &SharedStore, args: &Args) -> Result<RESPV
     sections.insert(
         "replication".to_string(),
         format!(
-            "# Replication\nrole:{}\nconnected_slaves:0\nmaster_replid:0\nmaster_repl_offset:0\n",
+            "# Replication\nrole:{}\nconnected_slaves:0\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0\n",
             role
         ),
     );
@@ -718,10 +718,21 @@ struct Args {
 async fn main() {
     let args = Args::parse();
 
-    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
         .await
         .unwrap();
+    let master_addr = args.replicaof.as_ref().map(|s| s.replace(" ", ":"));
+    if let Some(addr) = master_addr {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(&encode(&array(vec![RESPValue::SimpleString(
+                "PING".to_string(),
+            )])))
+            .await
+            .ok();
+    }
+
+    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
 
     loop {
         match listener.accept().await {
@@ -738,6 +749,7 @@ async fn main() {
                             Ok(0) => break,
                             Ok(n) => {
                                 let parsed = decode(&buf[..n]);
+                                println!("{parsed:?}");
 
                                 let (cmd, argv) = {
                                     if let RESPValue::Array(array) = parsed
@@ -759,7 +771,8 @@ async fn main() {
                                             let mut results = vec![];
                                             for (cmd, argv) in &cmd_queue {
                                                 results.push(resp_result(
-                                                    execute_command(cmd, argv, &loc_store, &args).await,
+                                                    execute_command(cmd, argv, &loc_store, &args)
+                                                        .await,
                                                 ));
                                             }
 
