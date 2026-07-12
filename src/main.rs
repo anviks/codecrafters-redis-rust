@@ -725,9 +725,9 @@ async fn main() {
     if let Some(addr) = master_addr {
         let mut stream = TcpStream::connect(addr).await.unwrap();
         stream
-            .write_all(&encode(&array(vec![RESPValue::SimpleString(
+            .write_all(&encode(&array(vec![RESPValue::BulkString(Some(
                 "PING".to_string(),
-            )])))
+            ))])))
             .await
             .ok();
     }
