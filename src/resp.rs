@@ -35,9 +35,6 @@ pub(crate) enum RESPValue {
     Integer(i64),
     BulkString(Option<String>),
     Array(Option<Vec<RESPValue>>),
-    // Null,
-    // Boolean(bool),
-    // Double(f64),
 }
 
 impl std::hash::Hash for RESPValue {
@@ -145,21 +142,6 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
             }
             RESPValue::Array(Some((0..count).map(|_| decode_value(input, i)).collect()))
         }
-        // b'_' => {
-        //     read_until_crlf(input, i);
-        //     RESPValue::Null
-        // }
-        // b'#' => match read_until_crlf(input, i) {
-        //     [b't'] => RESPValue::Boolean(true),
-        //     [b'f'] => RESPValue::Boolean(false),
-        //     b => panic!("Invalid boolean byte sequence: {:?}", b),
-        // },
-        // b',' => RESPValue::Double(
-        //     str::from_utf8(read_until_crlf(input, i))
-        //         .unwrap()
-        //         .parse()
-        //         .unwrap(),
-        // ),
         _ => panic!("Unexpected byte: {}", type_byte),
     };
 }
@@ -182,11 +164,7 @@ pub fn encode(input: &RESPValue) -> Vec<u8> {
                 result
             }
             None => b"*-1\r\n".to_vec(),
-        }, // RESPValue::Null => "_\r\n".bytes().collect(),
-           // RESPValue::Boolean(bool) => format!("#{}\r\n", bool.to_string().chars().nth(0).unwrap())
-           //     .bytes()
-           //     .collect(),
-           // RESPValue::Double(_) => todo!(),
+        },
     }
 }
 
