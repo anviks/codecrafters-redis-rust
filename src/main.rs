@@ -1,6 +1,6 @@
 use crate::{
     commands::execute_command,
-    connection::{Conn, Flow},
+    connection::Connection,
     resp::{RESPValue, array, encode, try_decode},
     store::{SharedStore, Store},
 };
@@ -42,7 +42,7 @@ fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
     }
 }
 
-async fn handle_client(mut conn: Conn, store: SharedStore, is_replica: bool) {
+async fn handle_client(mut conn: Connection, store: SharedStore, is_replica: bool) {
     loop {
         let Some(frame) = conn.read_frame().await else {
             break;
@@ -53,18 +53,17 @@ async fn handle_client(mut conn: Conn, store: SharedStore, is_replica: bool) {
         };
 
         match conn.dispatch(cmd, argv, &store, is_replica).await {
-            Flow::Reply(respvalue) => {
+            Some(respvalue) => {
                 if conn.stream.write_all(&encode(&respvalue)).await.is_err() {
                     break;
                 }
             }
-            Flow::Silent => {}
-            Flow::Close => return,
+            None => {}
         }
     }
 }
 
-async fn handle_master(mut conn: Conn, store: SharedStore, is_replica: bool) {
+async fn handle_master(mut conn: Connection, store: SharedStore, is_replica: bool) {
     loop {
         let Some(frame) = conn.read_frame().await else {
             break;
@@ -134,7 +133,7 @@ async fn main() {
         )
         .await;
 
-        let mut conn = Conn::new(stream);
+        let mut conn = Connection::new(stream);
         conn.read_rdb().await;
 
         tokio::spawn(handle_master(conn, Arc::clone(&store), is_replica));
@@ -144,7 +143,7 @@ async fn main() {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let loc_store = Arc::clone(&store);
-                let conn = Conn::new(stream);
+                let conn = Connection::new(stream);
                 tokio::spawn(handle_client(conn, loc_store, is_replica));
             }
             Err(e) => {

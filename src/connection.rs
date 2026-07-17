@@ -10,12 +10,6 @@ use tokio::{
     sync::mpsc,
 };
 
-pub(crate) enum Flow {
-    Reply(RESPValue),
-    Silent,
-    Close,
-}
-
 fn is_write_command(cmd: &str) -> bool {
     matches!(
         cmd,
@@ -23,14 +17,14 @@ fn is_write_command(cmd: &str) -> bool {
     )
 }
 
-pub(crate) struct Conn {
+pub(crate) struct Connection {
     pub(crate) stream: TcpStream,
     buf: Vec<u8>,
     cmd_queue: Vec<(String, Vec<RESPValue>)>,
     in_transaction: bool,
 }
 
-impl Conn {
+impl Connection {
     pub(crate) fn new(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -93,7 +87,7 @@ impl Conn {
         argv: Vec<RESPValue>,
         store: &SharedStore,
         is_replica: bool,
-    ) -> Flow {
+    ) -> Option<RESPValue> {
         let result = match cmd.as_str() {
             "exec" => {
                 if !self.in_transaction {
@@ -149,7 +143,7 @@ impl Conn {
                     }
                 }
 
-                return Flow::Silent;
+                return None;
             }
             _ if self.in_transaction => {
                 self.cmd_queue.push((cmd, argv));
@@ -168,6 +162,6 @@ impl Conn {
             }
         };
 
-        Flow::Reply(resp_result(result))
+        Some(resp_result(result))
     }
 }
