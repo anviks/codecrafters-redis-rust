@@ -114,60 +114,69 @@ impl RESPValue {
     }
 }
 
-fn read_until_crlf<'a>(input: &'a [u8], i: &mut usize) -> &'a [u8] {
+fn read_until_crlf<'a>(input: &'a [u8], i: &mut usize) -> Option<&'a [u8]> {
     let start = *i;
-    while input[*i] != b'\r' {
+    while *i < input.len() && input[*i] != b'\r' {
         *i += 1;
+    }
+    // \r and \n need to be present
+    if *i + 1 >= input.len() {
+        return None;
     }
     let slice = &input[start..*i];
     *i += 2; // skip \r\n
-    slice
+    Some(slice)
 }
 
-fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
+fn decode_value(input: &[u8], i: &mut usize) -> Result<Option<RESPValue>, CmdError> {
+    if input.len() <= *i {
+        return Ok(None);
+    }
     let type_byte = input[*i];
     *i += 1;
 
+    let s = match read_until_crlf(input, i) {
+        Some(slice) => str::from_utf8(slice).map_err(|_| CmdError::Syntax)?,
+        None => return Ok(None),
+    };
+
     return match type_byte {
-        b'+' => RESPValue::SimpleString(
-            str::from_utf8(read_until_crlf(input, i))
-                .unwrap()
-                .to_string(),
-        ),
-        b'-' => RESPValue::SimpleError(
-            str::from_utf8(read_until_crlf(input, i))
-                .unwrap()
-                .to_string(),
-        ),
-        b':' => RESPValue::Integer(
-            str::from_utf8(read_until_crlf(input, i))
-                .unwrap()
-                .parse()
-                .unwrap(),
-        ),
+        b'+' => Ok(Some(RESPValue::SimpleString(s.to_string()))),
+        b'-' => Ok(Some(RESPValue::SimpleError(s.to_string()))),
+        b':' => Ok(Some(RESPValue::Integer(
+            s.parse().map_err(|_| CmdError::Syntax)?,
+        ))),
         b'$' => {
-            let count: i32 = str::from_utf8(read_until_crlf(input, i))
-                .unwrap()
-                .parse()
-                .unwrap();
+            let count: i32 = s.parse().map_err(|_| CmdError::Syntax)?;
             if count == -1 {
-                return RESPValue::BulkString(None);
+                return Ok(Some(RESPValue::BulkString(None)));
             }
-            let slice = &input[*i..*i + count as usize];
-            *i += count as usize + 2;
-            slice.into()
+            if count < 0 {
+                return Err(CmdError::Syntax);
+            }
+            let count = count as usize;
+            if input.len() < *i + count + 2 {
+                return Ok(None);
+            }
+            let slice = &input[*i..*i + count];
+            *i += count + 2;
+            Ok(Some(slice.into()))
         }
         b'*' => {
-            let count: i32 = str::from_utf8(read_until_crlf(input, i))
-                .unwrap()
-                .parse()
-                .unwrap();
+            let count: i32 = s.parse().map_err(|_| CmdError::Syntax)?;
             if count == -1 {
-                return RESPValue::Array(None);
+                return Ok(Some(RESPValue::Array(None)));
             }
-            RESPValue::Array(Some((0..count).map(|_| decode_value(input, i)).collect()))
+            let mut elems = vec![];
+            for _ in 0..count {
+                match decode_value(input, i)? {
+                    Some(r) => elems.push(r),
+                    None => return Ok(None),
+                }
+            }
+            Ok(Some(RESPValue::Array(Some(elems))))
         }
-        _ => panic!("Unexpected byte: {}", type_byte),
+        _ => Err(CmdError::Syntax),
     };
 }
 
@@ -198,7 +207,8 @@ pub fn encode(input: &RESPValue) -> Vec<u8> {
     }
 }
 
-pub fn decode(input: &[u8]) -> RESPValue {
+pub fn try_decode(input: &[u8]) -> Result<Option<(RESPValue, usize)>, CmdError> {
     let mut i = 0;
-    decode_value(input, &mut i)
+    let result = decode_value(input, &mut i);
+    result.map(|res| res.map(|r| (r, i)))
 }
