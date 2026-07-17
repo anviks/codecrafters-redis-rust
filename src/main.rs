@@ -741,6 +741,40 @@ impl Store {
 
 type SharedStore = Arc<Mutex<Store>>;
 
+struct Conn {
+    stream: TcpStream,
+    buf: Vec<u8>,
+    cmd_queue: Vec<(String, Vec<RESPValue>)>,
+    in_transaction: bool,
+}
+
+impl Conn {
+    async fn read_frame(&mut self) -> Option<RESPValue> {
+        let mut chunk = [0; 512];
+
+        loop {
+            match try_decode(&self.buf) {
+                Ok(Some((parsed, consumed))) => {
+                    self.buf.drain(..consumed);
+                    println!("{parsed:?}");
+                    return Some(parsed);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let output = encode(&RESPValue::SimpleError(err.to_string()));
+                    self.stream.write_all(&output).await.ok();
+                    return None;
+                }
+            }
+
+            match self.stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+    }
+}
+
 #[derive(Parser, Clone, Debug)]
 struct Args {
     #[arg(long, default_value_t = 6379)]
@@ -798,128 +832,93 @@ async fn main() {
 
     loop {
         match listener.accept().await {
-            Ok((mut stream, _)) => {
+            Ok((stream, _)) => {
                 let loc_store = Arc::clone(&store);
                 let args = args.clone();
                 tokio::spawn(async move {
-                    let mut cmd_queue: Vec<(String, Vec<RESPValue>)> = vec![];
-                    let mut in_transaction = false;
-
-                    let mut buf = vec![];
-                    let mut chunk = [0; 512];
+                    let mut conn = Conn {
+                        stream,
+                        buf: vec![],
+                        cmd_queue: vec![],
+                        in_transaction: false,
+                    };
 
                     loop {
-                        match stream.read(&mut chunk).await {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                buf.extend_from_slice(&chunk[..n]);
-                                loop {
-                                    println!("buf: {:?}", buf);
-                                    match try_decode(&buf) {
-                                        Ok(Some((parsed, consumed))) => {
-                                            buf.drain(..consumed);
-                                            println!("{parsed:?}");
+                        let Some(frame) = conn.read_frame().await else {
+                            break;
+                        };
 
-                                            let (cmd, argv) = {
-                                                if let RESPValue::Array(array) = parsed
-                                                    && let Some(arr) = array
-                                                    && !arr.is_empty()
-                                                    && let Some(command) = arr[0].as_str()
-                                                {
-                                                    (command.to_lowercase(), arr)
-                                                } else {
-                                                    continue;
-                                                }
-                                            };
+                        let (cmd, argv) = {
+                            if let RESPValue::Array(array) = frame
+                                && let Some(arr) = array
+                                && !arr.is_empty()
+                                && let Some(command) = arr[0].as_str()
+                            {
+                                (command.to_lowercase(), arr)
+                            } else {
+                                continue;
+                            }
+                        };
 
-                                            let result: Result<RESPValue, CmdError> = match cmd
-                                                .as_str()
-                                            {
-                                                "exec" => {
-                                                    if !in_transaction {
-                                                        Err(CmdError::ExecWithoutMulti)
-                                                    } else {
-                                                        let mut results = vec![];
-                                                        for (cmd, argv) in &cmd_queue {
-                                                            results.push(resp_result(
-                                                                execute_command(
-                                                                    cmd, argv, &loc_store, &args,
-                                                                )
-                                                                .await,
-                                                            ));
-                                                        }
-
-                                                        cmd_queue.clear();
-                                                        in_transaction = false;
-
-                                                        Ok(array(results))
-                                                    }
-                                                }
-                                                "multi" => {
-                                                    if in_transaction {
-                                                        Err(CmdError::NestedMulti)
-                                                    } else {
-                                                        in_transaction = true;
-                                                        Ok(RESPValue::SimpleString(
-                                                            "OK".to_string(),
-                                                        ))
-                                                    }
-                                                }
-                                                "discard" => {
-                                                    if !in_transaction {
-                                                        Err(CmdError::DiscardWithoutMulti)
-                                                    } else {
-                                                        in_transaction = false;
-                                                        cmd_queue.clear();
-                                                        Ok(RESPValue::SimpleString(
-                                                            "OK".to_string(),
-                                                        ))
-                                                    }
-                                                }
-                                                "psync" => {
-                                                    let resp = RESPValue::SimpleString(
-                                                        "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
-                                                        .to_string(),
-                                                    );
-                                                    let output = encode(&resp);
-                                                    stream.write_all(&output).await.ok();
-                                                    let empty_rdb = fs::read("empty.rdb").unwrap();
-                                                    let mut output =
-                                                        format!("${}\r\n", empty_rdb.len())
-                                                            .as_bytes()
-                                                            .to_vec();
-                                                    output.extend(empty_rdb);
-                                                    stream.write_all(&output).await.ok();
-                                                    continue;
-                                                }
-                                                _ if in_transaction => {
-                                                    cmd_queue.push((cmd, argv));
-                                                    Ok(RESPValue::SimpleString(
-                                                        "QUEUED".to_string(),
-                                                    ))
-                                                }
-                                                _ => {
-                                                    execute_command(&cmd, &argv, &loc_store, &args)
-                                                        .await
-                                                }
-                                            };
-
-                                            let output = encode(&resp_result(result));
-                                            if stream.write_all(&output).await.is_err() {
-                                                break;
-                                            }
-                                        }
-                                        Ok(None) => break,
-                                        Err(err) => {
-                                            let output =
-                                                encode(&RESPValue::SimpleError(err.to_string()));
-                                            stream.write_all(&output).await.ok();
-                                            return;
-                                        }
+                        let result: Result<RESPValue, CmdError> = match cmd.as_str() {
+                            "exec" => {
+                                if !conn.in_transaction {
+                                    Err(CmdError::ExecWithoutMulti)
+                                } else {
+                                    let mut results = vec![];
+                                    for (cmd, argv) in &conn.cmd_queue {
+                                        results.push(resp_result(
+                                            execute_command(cmd, argv, &loc_store, &args).await,
+                                        ));
                                     }
+
+                                    conn.cmd_queue.clear();
+                                    conn.in_transaction = false;
+
+                                    Ok(array(results))
                                 }
                             }
-                            Err(_) => break,
+                            "multi" => {
+                                if conn.in_transaction {
+                                    Err(CmdError::NestedMulti)
+                                } else {
+                                    conn.in_transaction = true;
+                                    Ok(RESPValue::SimpleString("OK".to_string()))
+                                }
+                            }
+                            "discard" => {
+                                if !conn.in_transaction {
+                                    Err(CmdError::DiscardWithoutMulti)
+                                } else {
+                                    conn.in_transaction = false;
+                                    conn.cmd_queue.clear();
+                                    Ok(RESPValue::SimpleString("OK".to_string()))
+                                }
+                            }
+                            "psync" => {
+                                let resp = RESPValue::SimpleString(
+                                    "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
+                                        .to_string(),
+                                );
+                                let output = encode(&resp);
+                                conn.stream.write_all(&output).await.ok();
+                                let empty_rdb = fs::read("empty.rdb").unwrap();
+                                let mut output =
+                                    format!("${}\r\n", empty_rdb.len()).as_bytes().to_vec();
+                                output.extend(empty_rdb);
+                                conn.stream.write_all(&output).await.ok();
+                                continue;
+                            }
+                            _ if conn.in_transaction => {
+                                conn.cmd_queue.push((cmd, argv));
+                                Ok(RESPValue::SimpleString("QUEUED".to_string()))
+                            }
+                            _ => execute_command(&cmd, &argv, &loc_store, &args).await,
+                        };
+
+                        let output = encode(&resp_result(result));
+                        if conn.stream.write_all(&output).await.is_err() {
+                            break;
                         }
                     }
                 });
