@@ -14,7 +14,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{mpsc, oneshot},
 };
 mod resp;
 mod stream;
@@ -705,12 +705,20 @@ async fn communicate(stream: &mut TcpStream, message: &RESPValue) {
     }
 }
 
+fn is_write_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "set" | "del" | "incr" | "rpush" | "lpush" | "lpop" | "xadd"
+    )
+}
+
 struct Store {
     entries: HashMap<Vec<u8>, Value>,
     blpop_waiters: HashMap<Vec<u8>, VecDeque<oneshot::Sender<Vec<u8>>>>,
     xread_waiters: HashMap<u64, oneshot::Sender<()>>,
     xread_waiters_by_key: HashMap<Vec<u8>, VecDeque<u64>>,
     next_id: u64,
+    replicas: Vec<mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 impl Store {
@@ -721,6 +729,7 @@ impl Store {
             xread_waiters: HashMap::new(),
             xread_waiters_by_key: HashMap::new(),
             next_id: 1,
+            replicas: vec![],
         }
     }
 
@@ -755,6 +764,15 @@ struct Conn {
 }
 
 impl Conn {
+    fn new(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            buf: vec![],
+            cmd_queue: vec![],
+            in_transaction: false,
+        }
+    }
+
     async fn read_frame(&mut self) -> Option<RESPValue> {
         let mut chunk = [0; 512];
 
@@ -768,8 +786,30 @@ impl Conn {
                 Ok(None) => {}
                 Err(err) => {
                     let output = encode(&RESPValue::SimpleError(err.to_string()));
+                    eprintln!("Error when trying to read frame: {}", err);
                     self.stream.write_all(&output).await.ok();
                     return None;
+                }
+            }
+
+            match self.stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+    }
+
+    async fn read_rdb(&mut self) -> Option<()> {
+        let mut chunk = [0; 512];
+
+        loop {
+            // find end of "$<len>\r\n" header
+            if let Some(nl) = self.buf.windows(2).position(|w| w == b"\r\n") {
+                let len: usize = std::str::from_utf8(&self.buf[1..nl]).ok()?.parse().ok()?;
+                let start = nl + 2;
+                if self.buf.len() >= start + len {
+                    self.buf.drain(..start + len); // throw header + payload away
+                    return Some(());
                 }
             }
 
@@ -830,13 +870,33 @@ impl Conn {
                 let mut output = format!("${}\r\n", empty_rdb.len()).as_bytes().to_vec();
                 output.extend(empty_rdb);
                 self.stream.write_all(&output).await.ok();
+
+                let (sender, mut receiver) = mpsc::unbounded_channel();
+                store.lock().unwrap().replicas.push(sender);
+
+                while let Some(bytes) = receiver.recv().await {
+                    if self.stream.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+
                 return Flow::Silent;
             }
             _ if self.in_transaction => {
                 self.cmd_queue.push((cmd, argv));
                 Ok(RESPValue::SimpleString("QUEUED".to_string()))
             }
-            _ => execute_command(&cmd, &argv, store, args).await,
+            _ => {
+                let result = execute_command(&cmd, &argv, store, args).await;
+                if is_write_command(&cmd) {
+                    let encoded = encode(&RESPValue::Array(Some(argv.clone())));
+                    let store = store.lock().unwrap();
+                    for replica in &store.replicas {
+                        replica.send(encoded.clone()).ok();
+                    }
+                }
+                result
+            }
         };
 
         Flow::Reply(resp_result(result))
@@ -852,6 +912,42 @@ fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
         Some((command.to_lowercase(), arr))
     } else {
         None
+    }
+}
+
+async fn handle_client(mut conn: Conn, store: SharedStore, args: Args) {
+    loop {
+        let Some(frame) = conn.read_frame().await else {
+            break;
+        };
+
+        let Some((cmd, argv)) = parse_command(frame) else {
+            continue;
+        };
+
+        match conn.dispatch(cmd, argv, &store, &args).await {
+            Flow::Reply(respvalue) => {
+                if conn.stream.write_all(&encode(&respvalue)).await.is_err() {
+                    break;
+                }
+            }
+            Flow::Silent => {}
+            Flow::Close => return,
+        }
+    }
+}
+
+async fn handle_master(mut conn: Conn, store: SharedStore, args: Args) {
+    loop {
+        let Some(frame) = conn.read_frame().await else {
+            break;
+        };
+
+        let Some((cmd, argv)) = parse_command(frame) else {
+            continue;
+        };
+
+        execute_command(&cmd, &argv, &store, &args).await.ok();
     }
 }
 
@@ -871,6 +967,9 @@ async fn main() {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
         .await
         .unwrap();
+
+    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
+
     let master_addr = args.replicaof.as_ref().map(|s| s.replace(" ", ":"));
     if let Some(addr) = master_addr {
         let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -906,43 +1005,20 @@ async fn main() {
             &array(vec!["PSYNC".to_string(), "?".to_string(), "-1".to_string()]),
         )
         .await;
-    }
 
-    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
+        let mut conn = Conn::new(stream);
+        conn.read_rdb().await;
+
+        tokio::spawn(handle_master(conn, Arc::clone(&store), args.clone()));
+    }
 
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let loc_store = Arc::clone(&store);
                 let args = args.clone();
-                tokio::spawn(async move {
-                    let mut conn = Conn {
-                        stream,
-                        buf: vec![],
-                        cmd_queue: vec![],
-                        in_transaction: false,
-                    };
-
-                    loop {
-                        let Some(frame) = conn.read_frame().await else {
-                            break;
-                        };
-
-                        let Some((cmd, argv)) = parse_command(frame) else {
-                            continue;
-                        };
-
-                        match conn.dispatch(cmd, argv, &loc_store, &args).await {
-                            Flow::Reply(respvalue) => {
-                                if conn.stream.write_all(&encode(&respvalue)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Flow::Silent => {}
-                            Flow::Close => return,
-                        }
-                    }
-                });
+                let conn = Conn::new(stream);
+                tokio::spawn(handle_client(conn, loc_store, args));
             }
             Err(e) => {
                 println!("error: {}", e);
