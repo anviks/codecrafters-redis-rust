@@ -76,7 +76,7 @@ impl StreamId {
 #[derive(Clone, Debug)]
 pub(crate) struct StreamEntry {
     pub(crate) id: StreamId,
-    pub(crate) fields: Vec<(String, String)>,
+    pub(crate) fields: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Clone, Debug)]

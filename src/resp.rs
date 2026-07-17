@@ -24,6 +24,8 @@ pub(crate) enum CmdError {
     NestedMulti,
     #[error("ERR wrong number of arguments for command")]
     WrongArgs,
+    #[error("ERR syntax error")]
+    Syntax,
     #[error("ERR unknown command")]
     Unknown,
 }
@@ -33,7 +35,7 @@ pub(crate) enum RESPValue {
     SimpleString(String),
     SimpleError(String),
     Integer(i64),
-    BulkString(Option<String>),
+    BulkString(Option<Vec<u8>>),
     Array(Option<Vec<RESPValue>>),
 }
 
@@ -47,6 +49,18 @@ impl Eq for RESPValue {}
 
 impl From<String> for RESPValue {
     fn from(value: String) -> Self {
+        RESPValue::BulkString(Some(value.into_bytes()))
+    }
+}
+
+impl From<&[u8]> for RESPValue {
+    fn from(value: &[u8]) -> Self {
+        RESPValue::BulkString(Some(value.to_vec()))
+    }
+}
+
+impl From<Vec<u8>> for RESPValue {
+    fn from(value: Vec<u8>) -> Self {
         RESPValue::BulkString(Some(value))
     }
 }
@@ -77,11 +91,22 @@ pub(crate) fn resp_result(result: Result<RESPValue, CmdError>) -> RESPValue {
 }
 
 impl RESPValue {
-    pub(crate) fn as_str(&self) -> Option<&str> {
+    pub(crate) fn as_bytes(&self) -> Option<&Vec<u8>> {
         match self {
             RESPValue::BulkString(Some(s)) => Some(s),
             _ => None,
         }
+    }
+
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        match self {
+            RESPValue::BulkString(Some(s)) => str::from_utf8(s).ok(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn try_bytes(&self) -> Result<&Vec<u8>, CmdError> {
+        self.as_bytes().ok_or(CmdError::WrongType)
     }
 
     pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
@@ -130,7 +155,7 @@ fn decode_value(input: &[u8], i: &mut usize) -> RESPValue {
             }
             let slice = &input[*i..*i + count as usize];
             *i += count as usize + 2;
-            str::from_utf8(slice).unwrap().to_string().into()
+            slice.into()
         }
         b'*' => {
             let count: i32 = str::from_utf8(read_until_crlf(input, i))
@@ -152,7 +177,12 @@ pub fn encode(input: &RESPValue) -> Vec<u8> {
         RESPValue::SimpleError(err) => format!("-{err}\r\n").bytes().collect(),
         RESPValue::Integer(int) => format!(":{int}\r\n").bytes().collect(),
         RESPValue::BulkString(str) => match str {
-            Some(s) => format!("${}\r\n{}\r\n", s.len(), s).bytes().collect(),
+            Some(s) => {
+                let mut res: Vec<u8> = format!("${}\r\n", s.len()).bytes().collect();
+                res.extend(s);
+                res.extend("\r\n".bytes());
+                res
+            }
             None => b"$-1\r\n".to_vec(),
         },
         RESPValue::Array(respvalues) => match respvalues {

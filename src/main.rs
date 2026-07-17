@@ -21,27 +21,27 @@ mod stream;
 
 #[derive(Clone, Debug)]
 enum Data {
-    String(String),
-    List(VecDeque<String>),
+    String(Vec<u8>),
+    List(VecDeque<Vec<u8>>),
     Stream(Stream),
 }
 
 impl Data {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
-            Data::String(s) => Some(s),
+            Data::String(s) => str::from_utf8(s).ok(),
             _ => None,
         }
     }
 
-    pub(crate) fn as_vec(&self) -> Option<&VecDeque<String>> {
+    pub(crate) fn as_vec(&self) -> Option<&VecDeque<Vec<u8>>> {
         match self {
             Data::List(vec) => Some(vec),
             _ => None,
         }
     }
 
-    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut VecDeque<String>> {
+    pub(crate) fn as_vec_mut(&mut self) -> Option<&mut VecDeque<Vec<u8>>> {
         match self {
             Data::List(vec) => Some(vec),
             _ => None,
@@ -66,11 +66,11 @@ impl Data {
         self.as_str().ok_or(CmdError::WrongType)
     }
 
-    pub(crate) fn try_vec(&self) -> Result<&VecDeque<String>, CmdError> {
+    pub(crate) fn try_vec(&self) -> Result<&VecDeque<Vec<u8>>, CmdError> {
         self.as_vec().ok_or(CmdError::WrongType)
     }
 
-    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut VecDeque<String>, CmdError> {
+    pub(crate) fn try_vec_mut(&mut self) -> Result<&mut VecDeque<Vec<u8>>, CmdError> {
         self.as_vec_mut().ok_or(CmdError::WrongType)
     }
 
@@ -97,42 +97,62 @@ struct Value {
     expires_at: Option<Instant>,
 }
 
-fn arg(arr: &[RESPValue], i: usize) -> Result<&str, CmdError> {
-    let arg = arr.get(i).ok_or(CmdError::WrongArgs)?;
-    arg.try_str()
+fn arg(arr: &[RESPValue], i: usize) -> Result<&RESPValue, CmdError> {
+    arr.get(i).ok_or(CmdError::WrongArgs)
+}
+
+fn arg_bytes(arr: &[RESPValue], i: usize) -> Result<&Vec<u8>, CmdError> {
+    arg(arr, i)?.try_bytes()
+}
+
+fn arg_str(arr: &[RESPValue], i: usize) -> Result<&str, CmdError> {
+    str::from_utf8(arg_bytes(arr, i)?).map_err(|_| CmdError::Syntax)
 }
 
 fn arg_int(arr: &[RESPValue], i: usize) -> Result<i64, CmdError> {
-    arg(arr, i)?.parse().map_err(|_| CmdError::NotInt)
+    str::from_utf8(arg_bytes(arr, i)?)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(CmdError::NotInt)
 }
 
 fn arg_uint(arr: &[RESPValue], i: usize) -> Result<u64, CmdError> {
-    arg(arr, i)?.parse().map_err(|_| CmdError::NotUint)
+    str::from_utf8(arg_bytes(arr, i)?)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(CmdError::NotUint)
 }
 
 fn arg_double(arr: &[RESPValue], i: usize) -> Result<f64, CmdError> {
-    arg(arr, i)?.parse().map_err(|_| CmdError::NotDouble)
+    str::from_utf8(arg_bytes(arr, i)?)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(CmdError::NotDouble)
 }
 
-fn to_strings(arr: &[RESPValue]) -> Result<Vec<String>, CmdError> {
+fn to_bytes(arr: &[RESPValue]) -> Result<Vec<Vec<u8>>, CmdError> {
     arr.iter()
-        .map(|resp| resp.try_str().map(str::to_string))
+        .map(|resp| resp.try_bytes().map(Vec::clone))
         .collect()
 }
 
-fn parse_expiry(args: &[RESPValue]) -> Option<Instant> {
-    let str = arg(args, 0).ok()?;
-    let uint = arg_uint(args, 1).ok()?;
+fn parse_expiry(args: &[RESPValue]) -> Result<Option<Instant>, CmdError> {
+    if args.is_empty() {
+        return Ok(None);
+    }
+
+    let str = arg_str(args, 0)?;
+    let uint = arg_uint(args, 1)?;
 
     match str.to_lowercase().as_str() {
-        "ex" => Some(Instant::now().add(Duration::from_secs(uint))),
-        "px" => Some(Instant::now().add(Duration::from_millis(uint))),
-        _ => None,
+        "ex" => Ok(Some(Instant::now().add(Duration::from_secs(uint)))),
+        "px" => Ok(Some(Instant::now().add(Duration::from_millis(uint)))),
+        _ => Err(CmdError::Syntax),
     }
 }
 
 fn cmd_lpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let mut lock = store.lock().unwrap();
 
     match lock.entries.get_mut(key) {
@@ -155,23 +175,23 @@ fn cmd_lpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 }
 
 fn cmd_lpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let mut lock = store.lock().unwrap();
 
     let vec_len = match lock.entries.get_mut(key) {
         Some(val) => {
             let vec = val.data.try_vec_mut()?;
-            for v in to_strings(&arr[2..])? {
+            for v in to_bytes(&arr[2..])? {
                 vec.push_front(v);
             }
             vec.len()
         }
         None => {
-            let mut vec = to_strings(&arr[2..])?;
+            let mut vec = to_bytes(&arr[2..])?;
             vec.reverse();
             let len = vec.len();
             lock.entries.insert(
-                key.to_string(),
+                key.clone(),
                 Value {
                     data: Data::List(vec.into()),
                     expires_at: None,
@@ -185,7 +205,7 @@ fn cmd_lpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 }
 
 fn cmd_llen(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let lock = store.lock().unwrap();
 
     let vec_len = match lock.entries.get(key) {
@@ -197,7 +217,7 @@ fn cmd_llen(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 }
 
 fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let lock = store.lock().unwrap();
     match lock.entries.get(key) {
         Some(val) => {
@@ -230,7 +250,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
                 Ok(array_of(vec![]))
             } else {
                 Ok(array(
-                    vec.range(start..=stop).into_iter().map(|s| s.clone()),
+                    vec.range(start..=stop).map(|s| s.clone()),
                 ))
             }
         }
@@ -239,7 +259,7 @@ fn cmd_lrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
 }
 
 fn cmd_get(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let mut lock = store.lock().unwrap();
     match lock.entries.get(key) {
         Some(val) if val.expires_at.map_or(false, |inst| Instant::now() >= inst) => {
@@ -255,19 +275,19 @@ fn cmd_get(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
 }
 
 fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let value = Value {
-        data: Data::String(arg(&arr, 2)?.to_string()),
-        expires_at: parse_expiry(&arr[3..]),
+        data: Data::String(arg_bytes(&arr, 2)?.clone()),
+        expires_at: parse_expiry(&arr[3..])?,
     };
 
-    store.lock().unwrap().entries.insert(key.to_string(), value);
+    store.lock().unwrap().entries.insert(key.clone(), value);
     Ok(RESPValue::SimpleString("OK".to_string()))
 }
 
 fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
-    let mut values: VecDeque<String> = to_strings(&arr[2..])?.into();
+    let key = arg_bytes(&arr, 1)?;
+    let mut values: VecDeque<Vec<u8>> = to_bytes(&arr[2..])?.into();
     let mut sent_values = 0;
     let mut lock = store.lock().unwrap();
 
@@ -296,7 +316,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
         None => {
             let len = values.len();
             lock.entries.insert(
-                key.to_string(),
+                key.clone(),
                 Value {
                     data: Data::List(VecDeque::from(values)),
                     expires_at: None,
@@ -310,7 +330,7 @@ fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 }
 
 async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let timeout = arg_double(&arr, 2)?;
 
     let receiver = {
@@ -319,13 +339,13 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
         if let Some(val) = lock.entries.get_mut(key) {
             let vec = val.data.try_vec_mut()?;
             if let Some(v) = vec.pop_front() {
-                return Ok(array(vec![key.to_string(), v]));
+                return Ok(array(vec![key.clone(), v]));
             }
         }
 
         let (sender, receiver) = oneshot::channel();
         lock.blpop_waiters
-            .entry(key.to_string())
+            .entry(key.clone())
             .or_default()
             .push_back(sender);
         receiver
@@ -334,19 +354,19 @@ async fn cmd_blpop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     if timeout > 0.0 {
         let duration = Duration::from_secs_f64(timeout);
         Ok(match tokio::time::timeout(duration, receiver).await {
-            Ok(Ok(value)) => array(vec![key.to_string(), value]),
+            Ok(Ok(value)) => array(vec![key.clone(), value]),
             _ => RESPValue::Array(None),
         })
     } else {
         Ok(receiver
             .await
-            .map(|value| array(vec![key.to_string(), value]))
+            .map(|value| array(vec![key.clone(), value]))
             .unwrap_or(RESPValue::Array(None)))
     }
 }
 
 fn cmd_type(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     Ok(match store.lock().unwrap().entries.get(key) {
         Some(Value {
             data: value,
@@ -357,19 +377,19 @@ fn cmd_type(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 }
 
 fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
-    let entry_id = arg(&arr, 2)?;
+    let key = arg_bytes(&arr, 1)?;
+    let entry_id = arg_str(&arr, 2)?;
     arg(&arr, 3)?;
 
     let mut fields = vec![];
     for i in (3..arr.len()).step_by(2) {
-        let field = arg(&arr, i)?.to_string();
-        let value = arg(&arr, i + 1)?.to_string();
+        let field = arg_bytes(&arr, i)?.clone();
+        let value = arg_bytes(&arr, i + 1)?.clone();
         fields.push((field, value));
     }
 
     let mut lock = store.lock().unwrap();
-    let val = lock.entries.entry(key.to_string()).or_insert(Value {
+    let val = lock.entries.entry(key.clone()).or_insert(Value {
         data: Data::Stream(Stream {
             entries: vec![],
             last_id: StreamId { ms: 0, seq: 0 },
@@ -395,9 +415,9 @@ fn cmd_xadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 }
 
 fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let start = {
-        let s = arg(&arr, 2)?;
+        let s = arg_str(&arr, 2)?;
         if s == "-" {
             StreamId { ms: 0, seq: 0 }
         } else if s.contains("-") {
@@ -410,7 +430,7 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
         }
     };
     let end = {
-        let s = arg(&arr, 3)?;
+        let s = arg_str(&arr, 3)?;
         if s == "+" {
             StreamId {
                 ms: u64::MAX,
@@ -454,7 +474,7 @@ fn cmd_xrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
 
 fn filter_stream_entries(
     lock: &Store,
-    stream_keys: &Vec<String>,
+    stream_keys: &Vec<Vec<u8>>,
     stream_ids: &Vec<StreamId>,
 ) -> Result<Vec<RESPValue>, CmdError> {
     let mut result = vec![];
@@ -491,7 +511,7 @@ fn filter_stream_entries(
 
 async fn xread_worker(
     store: &SharedStore,
-    stream_keys: &Vec<String>,
+    stream_keys: &Vec<Vec<u8>>,
     stream_ids: &Vec<StreamId>,
 ) -> Result<RESPValue, CmdError> {
     loop {
@@ -520,9 +540,11 @@ async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     let mut block_arg = None;
     let mut i = 1;
     loop {
-        let argument = arg(&arr, i)?;
+        let Ok(s) = str::from_utf8(arg_bytes(&arr, i)?) else {
+            break;
+        };
         i += 1;
-        match argument.to_lowercase().as_str() {
+        match s.to_lowercase().as_str() {
             "streams" => {
                 break;
             }
@@ -541,8 +563,8 @@ async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
     let pair_count = arg_count / 2;
     let stream_keys = arr[i..i + pair_count]
         .iter()
-        .map(|k| k.try_str().map(str::to_string))
-        .collect::<Result<Vec<String>, CmdError>>()?;
+        .map(|k| k.try_bytes().cloned())
+        .collect::<Result<Vec<Vec<u8>>, CmdError>>()?;
     let stream_ids = arr[i + pair_count..]
         .iter()
         .enumerate()
@@ -594,11 +616,11 @@ async fn cmd_xread(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, 
 }
 
 fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
-    let key = arg(&arr, 1)?;
+    let key = arg_bytes(&arr, 1)?;
     let mut lock = store.lock().unwrap();
 
-    let value = lock.entries.entry(key.to_string()).or_insert(Value {
-        data: Data::String("0".to_string()),
+    let value = lock.entries.entry(key.clone()).or_insert(Value {
+        data: Data::String(vec![b'0']),
         expires_at: None,
     });
 
@@ -608,7 +630,7 @@ fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
         .parse::<i64>()
         .map_err(|_| CmdError::NotInt)?
         + 1;
-    value.data = Data::String(new_num.to_string());
+    value.data = Data::String(new_num.to_string().into_bytes());
 
     Ok(RESPValue::Integer(new_num))
 }
@@ -628,7 +650,7 @@ fn cmd_info(arr: &[RESPValue], store: &SharedStore, args: &Args) -> Result<RESPV
         ),
     );
 
-    if let Ok(s) = arg(&arr, 1) {
+    if let Ok(s) = arg_str(&arr, 1) {
         match sections.get(&s.to_lowercase()) {
             Some(section) => Ok(section.to_string().into()),
             None => todo!(),
@@ -686,10 +708,10 @@ async fn communicate(stream: &mut TcpStream, message: &RESPValue) {
 }
 
 struct Store {
-    entries: HashMap<String, Value>,
-    blpop_waiters: HashMap<String, VecDeque<oneshot::Sender<String>>>,
+    entries: HashMap<Vec<u8>, Value>,
+    blpop_waiters: HashMap<Vec<u8>, VecDeque<oneshot::Sender<Vec<u8>>>>,
     xread_waiters: HashMap<u64, oneshot::Sender<()>>,
-    xread_waiters_by_key: HashMap<String, VecDeque<u64>>,
+    xread_waiters_by_key: HashMap<Vec<u8>, VecDeque<u64>>,
     next_id: u64,
 }
 
@@ -711,7 +733,7 @@ impl Store {
         id
     }
 
-    fn add_key_for_xread_waiter(&mut self, key: String, waiter_id: u64) {
+    fn add_key_for_xread_waiter(&mut self, key: Vec<u8>, waiter_id: u64) {
         self.xread_waiters_by_key
             .entry(key)
             .or_default()
@@ -743,7 +765,7 @@ async fn main() {
 
         communicate(
             &mut stream,
-            &array(vec![RESPValue::BulkString(Some("PING".to_string()))]),
+            &array(vec![RESPValue::BulkString(Some(b"PING".to_vec()))]),
         )
         .await;
 
