@@ -16,19 +16,9 @@ mod resp;
 mod store;
 mod stream;
 
-async fn communicate(stream: &mut TcpStream, message: &RESPValue) {
-    stream.write_all(&encode(message)).await.ok();
-
-    let mut buf = [0; 512];
-    match stream.read(&mut buf).await {
-        Ok(0) | Err(_) => {}
-        Ok(n) => {
-            let parsed = try_decode(&buf[..n]);
-            if let Ok(Some((val, _))) = parsed {
-                println!("Response from master: {}", val);
-            }
-        }
-    }
+async fn communicate(conn: &mut Connection, message: &RESPValue) {
+    conn.stream.write_all(&encode(message)).await.ok();
+    conn.read_frame().await;
 }
 
 fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
@@ -114,16 +104,17 @@ async fn main() {
 
     let master_addr = args.replicaof.as_ref().map(|s| s.replace(" ", ":"));
     if let Some(addr) = master_addr {
-        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let mut conn = Connection::new(stream);
 
         communicate(
-            &mut stream,
+            &mut conn,
             &array(vec![RESPValue::BulkString(Some(b"PING".to_vec()))]),
         )
         .await;
 
         communicate(
-            &mut stream,
+            &mut conn,
             &array(vec![
                 "REPLCONF".to_string(),
                 "listening-port".to_string(),
@@ -133,7 +124,7 @@ async fn main() {
         .await;
 
         communicate(
-            &mut stream,
+            &mut conn,
             &array(vec![
                 "REPLCONF".to_string(),
                 "capa".to_string(),
@@ -143,12 +134,11 @@ async fn main() {
         .await;
 
         communicate(
-            &mut stream,
+            &mut conn,
             &array(vec!["PSYNC".to_string(), "?".to_string(), "-1".to_string()]),
         )
         .await;
 
-        let mut conn = Connection::new(stream);
         conn.read_rdb().await;
 
         tokio::spawn(handle_master(conn, Arc::clone(&store), is_replica));
