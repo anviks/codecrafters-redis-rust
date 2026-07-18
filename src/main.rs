@@ -60,8 +60,6 @@ async fn handle_master(mut conn: Connection, store: SharedStore, is_replica: boo
             break;
         };
 
-        offset += consumed;
-
         if let Some((cmd, argv)) = parse_command(frame) {
             if cmd == "replconf"
                 && argv
@@ -79,6 +77,8 @@ async fn handle_master(mut conn: Connection, store: SharedStore, is_replica: boo
                 execute_command(&cmd, &argv, &store, is_replica).await.ok();
             }
         };
+
+        offset += consumed;
     }
 }
 
