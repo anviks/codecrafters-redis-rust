@@ -1,9 +1,16 @@
 use crate::{
-    commands::execute_command,
+    commands::{arg_str, arg_uint, execute_command},
+    parse_command,
     resp::{CmdError, RESPValue, array, encode, resp_result, try_decode},
-    store::SharedStore,
+    store::{Replica, SharedStore},
 };
-use std::fs;
+use std::{
+    fs,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -34,15 +41,15 @@ impl Connection {
         }
     }
 
-    pub(crate) async fn read_frame(&mut self) -> Option<RESPValue> {
+    pub(crate) async fn read_frame(&mut self) -> Option<(RESPValue, usize)> {
         let mut chunk = [0; 512];
 
         loop {
             match try_decode(&self.buf) {
                 Ok(Some((parsed, consumed))) => {
                     self.buf.drain(..consumed);
-                    println!("{parsed:?}");
-                    return Some(parsed);
+                    println!("Received something from some stream: {parsed}");
+                    return Some((parsed, consumed));
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -135,11 +142,39 @@ impl Connection {
                 self.stream.write_all(&output).await.ok();
 
                 let (sender, mut receiver) = mpsc::unbounded_channel();
-                store.lock().unwrap().replicas.push(sender);
+                let ack_offset = Arc::new(AtomicU64::new(0));
+                store.lock().unwrap().replicas.push(Replica {
+                    sender,
+                    offset: Arc::clone(&ack_offset),
+                });
 
-                while let Some(bytes) = receiver.recv().await {
-                    if self.stream.write_all(&bytes).await.is_err() {
-                        break;
+                // "Permanently" park this task here to handle communication to and from a specific replica
+                loop {
+                    tokio::select! {
+                        // outbound: a propagated command to forward
+                        maybe_bytes = receiver.recv() => {
+                            match maybe_bytes {
+                                Some(bytes) => if self.stream.write_all(&bytes).await.is_err() { break; },
+                                None => break,
+                            }
+                        }
+                        // inbound: the replica sent us something
+                        frame = self.read_frame() => {
+                            match frame {
+                                Some((resp, _)) => {
+                                    if let Some(arr) = resp.as_vec()
+                                        && let Ok(s0) = arg_str(arr, 0)
+                                        && s0.eq_ignore_ascii_case("replconf")
+                                        && let Ok(s1) = arg_str(arr, 1)
+                                        && s1.eq_ignore_ascii_case("ack")
+                                        && let Ok(offset) = arg_uint(arr, 2)
+                                    {
+                                        ack_offset.store(offset, Ordering::Relaxed);
+                                    }
+                                },
+                                None => break,
+                            }
+                        }
                     }
                 }
 
@@ -153,9 +188,10 @@ impl Connection {
                 let result = execute_command(&cmd, &argv, store, is_replica).await;
                 if is_write_command(&cmd) {
                     let encoded = encode(&RESPValue::Array(Some(argv.clone())));
-                    let store = store.lock().unwrap();
+                    let mut store = store.lock().unwrap();
+                    store.master_offset += encoded.len() as u64;
                     for replica in &store.replicas {
-                        replica.send(encoded.clone()).ok();
+                        replica.sender.send(encoded.clone()).ok();
                     }
                 }
                 result

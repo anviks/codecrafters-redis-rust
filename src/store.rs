@@ -1,7 +1,7 @@
 use crate::{resp::CmdError, stream::Stream};
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU64},
     time::Instant,
     u64,
 };
@@ -85,13 +85,19 @@ pub(crate) struct Value {
     pub(crate) expires_at: Option<Instant>,
 }
 
+pub(crate) struct Replica {
+    pub(crate) sender: mpsc::UnboundedSender<Vec<u8>>,
+    pub(crate) offset: Arc<AtomicU64>,
+}
+
 pub(crate) struct Store {
     pub(crate) entries: HashMap<Vec<u8>, Value>,
     pub(crate) blpop_waiters: HashMap<Vec<u8>, VecDeque<oneshot::Sender<Vec<u8>>>>,
     pub(crate) xread_waiters: HashMap<u64, oneshot::Sender<()>>,
     pub(crate) xread_waiters_by_key: HashMap<Vec<u8>, VecDeque<u64>>,
     pub(crate) next_id: u64,
-    pub(crate) replicas: Vec<mpsc::UnboundedSender<Vec<u8>>>,
+    pub(crate) replicas: Vec<Replica>,
+    pub(crate) master_offset: u64,
 }
 
 pub(crate) type SharedStore = Arc<Mutex<Store>>;
@@ -105,6 +111,7 @@ impl Store {
             xread_waiters_by_key: HashMap::new(),
             next_id: 1,
             replicas: vec![],
+            master_offset: 0,
         }
     }
 

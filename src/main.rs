@@ -21,22 +21,22 @@ async fn communicate(stream: &mut TcpStream, message: &RESPValue) {
 
     let mut buf = [0; 512];
     match stream.read(&mut buf).await {
-        Ok(0) => {}
+        Ok(0) | Err(_) => {}
         Ok(n) => {
             let parsed = try_decode(&buf[..n]);
-            println!("{parsed:?}");
+            if let Ok(Some((val, _))) = parsed {
+                println!("Response from master: {}", val);
+            }
         }
-        Err(_) => {}
     }
 }
 
 fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
-    if let RESPValue::Array(array) = frame
-        && let Some(arr) = array
+    if let Some(arr) = frame.as_vec()
         && !arr.is_empty()
         && let Some(command) = arr[0].as_str()
     {
-        Some((command.to_lowercase(), arr))
+        Some((command.to_lowercase(), arr.clone()))
     } else {
         None
     }
@@ -44,7 +44,7 @@ fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
 
 async fn handle_client(mut conn: Connection, store: SharedStore, is_replica: bool) {
     loop {
-        let Some(frame) = conn.read_frame().await else {
+        let Some((frame, _)) = conn.read_frame().await else {
             break;
         };
 
@@ -64,16 +64,31 @@ async fn handle_client(mut conn: Connection, store: SharedStore, is_replica: boo
 }
 
 async fn handle_master(mut conn: Connection, store: SharedStore, is_replica: bool) {
+    let mut offset = 0;
     loop {
-        let Some(frame) = conn.read_frame().await else {
+        let Some((frame, consumed)) = conn.read_frame().await else {
             break;
         };
 
-        let Some((cmd, argv)) = parse_command(frame) else {
-            continue;
-        };
+        offset += consumed;
 
-        execute_command(&cmd, &argv, &store, is_replica).await.ok();
+        if let Some((cmd, argv)) = parse_command(frame) {
+            if cmd == "replconf"
+                && argv
+                    .get(1)
+                    .and_then(|a| a.as_str())
+                    .is_some_and(|s| s.eq_ignore_ascii_case("getack"))
+            {
+                let reply = array(vec![
+                    "REPLCONF".to_string(),
+                    "ACK".to_string(),
+                    offset.to_string(),
+                ]);
+                conn.stream.write_all(&encode(&reply)).await.ok();
+            } else {
+                execute_command(&cmd, &argv, &store, is_replica).await.ok();
+            }
+        };
     }
 }
 

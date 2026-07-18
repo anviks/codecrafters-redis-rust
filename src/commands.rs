@@ -1,11 +1,12 @@
 use crate::{
-    resp::{CmdError, RESPValue, array, array_of},
+    resp::{CmdError, RESPValue, array, array_of, encode},
     store::{Data, SharedStore, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
 };
 use std::{
     collections::{HashMap, VecDeque},
     ops::Add,
+    sync::atomic::Ordering,
     time::{Duration, Instant},
     u64,
 };
@@ -17,33 +18,33 @@ fn to_bytes(arr: &[RESPValue]) -> Result<Vec<Vec<u8>>, CmdError> {
         .collect()
 }
 
-fn arg(arr: &[RESPValue], i: usize) -> Result<&RESPValue, CmdError> {
+pub(crate) fn arg(arr: &[RESPValue], i: usize) -> Result<&RESPValue, CmdError> {
     arr.get(i).ok_or(CmdError::WrongArgs)
 }
 
-fn arg_bytes(arr: &[RESPValue], i: usize) -> Result<&Vec<u8>, CmdError> {
+pub(crate) fn arg_bytes(arr: &[RESPValue], i: usize) -> Result<&Vec<u8>, CmdError> {
     arg(arr, i)?.try_bytes()
 }
 
-fn arg_str(arr: &[RESPValue], i: usize) -> Result<&str, CmdError> {
+pub(crate) fn arg_str(arr: &[RESPValue], i: usize) -> Result<&str, CmdError> {
     str::from_utf8(arg_bytes(arr, i)?).map_err(|_| CmdError::Syntax)
 }
 
-fn arg_int(arr: &[RESPValue], i: usize) -> Result<i64, CmdError> {
+pub(crate) fn arg_int(arr: &[RESPValue], i: usize) -> Result<i64, CmdError> {
     str::from_utf8(arg_bytes(arr, i)?)
         .ok()
         .and_then(|s| s.parse().ok())
         .ok_or(CmdError::NotInt)
 }
 
-fn arg_uint(arr: &[RESPValue], i: usize) -> Result<u64, CmdError> {
+pub(crate) fn arg_uint(arr: &[RESPValue], i: usize) -> Result<u64, CmdError> {
     str::from_utf8(arg_bytes(arr, i)?)
         .ok()
         .and_then(|s| s.parse().ok())
         .ok_or(CmdError::NotUint)
 }
 
-fn arg_double(arr: &[RESPValue], i: usize) -> Result<f64, CmdError> {
+pub(crate) fn arg_double(arr: &[RESPValue], i: usize) -> Result<f64, CmdError> {
     str::from_utf8(arg_bytes(arr, i)?)
         .ok()
         .and_then(|s| s.parse().ok())
@@ -577,6 +578,60 @@ fn cmd_info(
     }
 }
 
+async fn cmd_wait(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let numreplicas = arg_uint(arr, 1)?;
+    let timeout = arg_uint(arr, 2)?;
+
+    let msg = encode(&array(vec![
+        "REPLCONF".to_string(),
+        "GETACK".to_string(),
+        "*".to_string(),
+    ]));
+
+    let target = {
+        let lock = store.lock().unwrap();
+        let t = lock.master_offset;
+        if t == 0 {
+            return Ok(RESPValue::Integer(lock.replicas.len() as i64));
+        }
+        t
+    };
+
+    let mut up_to_date = 0;
+    tokio::time::timeout(Duration::from_millis(timeout), async {
+        loop {
+            up_to_date = 0;
+
+            {
+                let lock = store.lock().unwrap();
+                for replica in &lock.replicas {
+                    if replica.offset.load(Ordering::Relaxed) >= target {
+                        up_to_date += 1;
+                    }
+                }
+            }
+
+            if up_to_date >= numreplicas {
+                return;
+            }
+
+            {
+                let mut lock = store.lock().unwrap();
+                lock.master_offset += msg.len() as u64;
+                for replica in &lock.replicas {
+                    replica.sender.send(msg.clone()).ok();
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .ok();
+
+    Ok(RESPValue::Integer(up_to_date as i64))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -601,6 +656,7 @@ pub(crate) async fn execute_command(
         "incr" => cmd_incr(&arr, &store),
         "info" => cmd_info(&arr, &store, is_replica),
         "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
+        "wait" => cmd_wait(&arr, &store).await,
         _ => Err(CmdError::Unknown),
     }
 }

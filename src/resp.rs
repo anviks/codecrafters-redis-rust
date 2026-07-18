@@ -1,3 +1,5 @@
+use std::ffi::os_str::Display;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -37,6 +39,27 @@ pub(crate) enum RESPValue {
     Integer(i64),
     BulkString(Option<Vec<u8>>),
     Array(Option<Vec<RESPValue>>),
+}
+
+impl std::fmt::Display for RESPValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            RESPValue::SimpleString(s) => write!(f, "{}", s),
+            RESPValue::SimpleError(e) => write!(f, "{}", e),
+            RESPValue::Integer(i) => write!(f, "{}", i),
+            RESPValue::BulkString(items) => match items {
+                Some(vec) => write!(f, "{}", String::from_utf8_lossy(vec)),
+                None => write!(f, "None"),
+            },
+            RESPValue::Array(respvalues) => match respvalues {
+                Some(vec) => {
+                    let items: Vec<String> = vec.iter().map(|r| r.to_string()).collect();
+                    write!(f, "[{}]", items.join(", "))
+                }
+                None => write!(f, "None"),
+            },
+        }
+    }
 }
 
 impl std::hash::Hash for RESPValue {
@@ -91,6 +114,13 @@ pub(crate) fn resp_result(result: Result<RESPValue, CmdError>) -> RESPValue {
 }
 
 impl RESPValue {
+    pub(crate) fn as_vec(&self) -> Option<&Vec<RESPValue>> {
+        match self {
+            RESPValue::Array(Some(v)) => Some(v),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_bytes(&self) -> Option<&Vec<u8>> {
         match self {
             RESPValue::BulkString(Some(s)) => Some(s),
@@ -103,6 +133,10 @@ impl RESPValue {
             RESPValue::BulkString(Some(s)) => str::from_utf8(s).ok(),
             _ => None,
         }
+    }
+
+    pub(crate) fn try_vec(&self) -> Result<&Vec<RESPValue>, CmdError> {
+        self.as_vec().ok_or(CmdError::WrongType)
     }
 
     pub(crate) fn try_bytes(&self) -> Result<&Vec<u8>, CmdError> {
