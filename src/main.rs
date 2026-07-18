@@ -1,13 +1,13 @@
 use crate::{
     commands::execute_command,
     connection::Connection,
-    resp::{RESPValue, array, encode, try_decode},
+    resp::{RESPValue, array, encode},
     store::{SharedStore, Store},
 };
 use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
 mod commands;
@@ -32,7 +32,7 @@ fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
     }
 }
 
-async fn handle_client(mut conn: Connection, store: SharedStore, is_replica: bool) {
+async fn handle_client(mut conn: Connection, store: SharedStore, config: SharedConfig) {
     loop {
         let Some((frame, _)) = conn.read_frame().await else {
             break;
@@ -42,7 +42,7 @@ async fn handle_client(mut conn: Connection, store: SharedStore, is_replica: boo
             continue;
         };
 
-        match conn.dispatch(cmd, argv, &store, is_replica).await {
+        match conn.dispatch(cmd, argv, &store, &config).await {
             Some(respvalue) => {
                 if conn.stream.write_all(&encode(&respvalue)).await.is_err() {
                     break;
@@ -53,7 +53,7 @@ async fn handle_client(mut conn: Connection, store: SharedStore, is_replica: boo
     }
 }
 
-async fn handle_master(mut conn: Connection, store: SharedStore, is_replica: bool) {
+async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedConfig) {
     let mut offset = 0;
     loop {
         let Some((frame, consumed)) = conn.read_frame().await else {
@@ -74,13 +74,23 @@ async fn handle_master(mut conn: Connection, store: SharedStore, is_replica: boo
                 ]);
                 conn.stream.write_all(&encode(&reply)).await.ok();
             } else {
-                execute_command(&cmd, &argv, &store, is_replica).await.ok();
+                execute_command(&cmd, &argv, &store, &config)
+                    .await
+                    .ok();
             }
         };
 
         offset += consumed;
     }
 }
+
+struct Config {
+    is_replica: bool,
+    dir: Option<String>,
+    dbfilename: Option<String>,
+}
+
+type SharedConfig = Arc<Config>;
 
 #[derive(Parser, Clone, Debug)]
 struct Args {
@@ -89,12 +99,22 @@ struct Args {
 
     #[arg(long)]
     replicaof: Option<String>,
+
+    #[arg(long)]
+    dir: Option<String>,
+
+    #[arg(long)]
+    dbfilename: Option<String>,
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let is_replica = args.replicaof.is_some();
+    let config = Arc::new(Config {
+        is_replica: args.replicaof.is_some(),
+        dir: args.dir,
+        dbfilename: args.dbfilename,
+    });
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
         .await
@@ -141,15 +161,17 @@ async fn main() {
 
         conn.read_rdb().await;
 
-        tokio::spawn(handle_master(conn, Arc::clone(&store), is_replica));
+        tokio::spawn(handle_master(conn, Arc::clone(&store), Arc::clone(&config)));
     }
 
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                let loc_store = Arc::clone(&store);
-                let conn = Connection::new(stream);
-                tokio::spawn(handle_client(conn, loc_store, is_replica));
+                tokio::spawn(handle_client(
+                    Connection::new(stream),
+                    Arc::clone(&store),
+                    Arc::clone(&config),
+                ));
             }
             Err(e) => {
                 println!("error: {}", e);

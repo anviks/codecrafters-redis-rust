@@ -1,4 +1,5 @@
 use crate::{
+    SharedConfig,
     resp::{CmdError, RESPValue, array, array_of, encode},
     store::{Data, SharedStore, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
@@ -551,10 +552,10 @@ fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 fn cmd_info(
     arr: &[RESPValue],
     store: &SharedStore,
-    is_replica: bool,
+    config: &SharedConfig,
 ) -> Result<RESPValue, CmdError> {
     let mut sections = HashMap::new();
-    let role = if is_replica { "slave" } else { "master" };
+    let role = if config.is_replica { "slave" } else { "master" };
     sections.insert(
         "replication".to_string(),
         format!(
@@ -632,11 +633,34 @@ async fn cmd_wait(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, C
     Ok(RESPValue::Integer(up_to_date as i64))
 }
 
+fn cmd_config(
+    arr: &[RESPValue],
+    store: &SharedStore,
+    config: &SharedConfig,
+) -> Result<RESPValue, CmdError> {
+    let subcommand = arg_str(arr, 1)?;
+    if !subcommand.eq_ignore_ascii_case("GET") {
+        return Err(CmdError::Syntax);
+    }
+    let key = arg_str(arr, 2)?;
+
+    let value = match key.to_lowercase().as_str() {
+        "dir" => &config.dir,
+        "dbfilename" => &config.dbfilename,
+        _ => return Ok(RESPValue::BulkString(None)),
+    };
+
+    match value {
+        Some(s) => Ok(array(vec![key.to_string(), s.clone()])),
+        None => Ok(RESPValue::Array(None)),
+    }
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
     store: &SharedStore,
-    is_replica: bool,
+    config: &SharedConfig,
 ) -> Result<RESPValue, CmdError> {
     match command {
         "ping" => Ok(RESPValue::SimpleString("PONG".to_string())),
@@ -654,9 +678,10 @@ pub(crate) async fn execute_command(
         "xrange" => cmd_xrange(&arr, &store),
         "xread" => cmd_xread(&arr, &store).await,
         "incr" => cmd_incr(&arr, &store),
-        "info" => cmd_info(&arr, &store, is_replica),
+        "info" => cmd_info(&arr, &store, &config),
         "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
         "wait" => cmd_wait(&arr, &store).await,
+        "config" => cmd_config(&arr, &store, &config),
         _ => Err(CmdError::Unknown),
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
+    SharedConfig,
     commands::{arg_str, arg_uint, execute_command},
-    parse_command,
     resp::{CmdError, RESPValue, array, encode, resp_result, try_decode},
     store::{Replica, SharedStore},
 };
@@ -8,7 +8,7 @@ use std::{
     fs,
     sync::{
         Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
 };
 use tokio::{
@@ -93,7 +93,7 @@ impl Connection {
         cmd: String,
         argv: Vec<RESPValue>,
         store: &SharedStore,
-        is_replica: bool,
+        config: &SharedConfig,
     ) -> Option<RESPValue> {
         let result = match cmd.as_str() {
             "exec" => {
@@ -102,9 +102,7 @@ impl Connection {
                 } else {
                     let mut results = vec![];
                     for (cmd, argv) in &self.cmd_queue {
-                        results.push(resp_result(
-                            execute_command(cmd, argv, store, is_replica).await,
-                        ));
+                        results.push(resp_result(execute_command(cmd, argv, store, config).await));
                     }
 
                     self.cmd_queue.clear();
@@ -185,7 +183,7 @@ impl Connection {
                 Ok(RESPValue::SimpleString("QUEUED".to_string()))
             }
             _ => {
-                let result = execute_command(&cmd, &argv, store, is_replica).await;
+                let result = execute_command(&cmd, &argv, store, config).await;
                 if is_write_command(&cmd) {
                     let encoded = encode(&RESPValue::Array(Some(argv.clone())));
                     let mut store = store.lock().unwrap();
