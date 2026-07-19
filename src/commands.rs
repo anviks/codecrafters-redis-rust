@@ -656,6 +656,10 @@ fn cmd_config(
     Ok(array(vec![key.to_string(), value.clone()]))
 }
 
+fn cmd_keys(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    Ok(array(store.lock().unwrap().entries.keys().cloned()))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -682,6 +686,7 @@ pub(crate) async fn execute_command(
         "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
         "wait" => cmd_wait(&arr, &store).await,
         "config" => cmd_config(&arr, &store, &config),
+        "keys" => cmd_keys(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
