@@ -6,9 +6,8 @@ use crate::{
 };
 use std::{
     collections::{HashMap, VecDeque},
-    ops::Add,
     sync::atomic::Ordering,
-    time::{Duration, Instant},
+    time::{Duration, SystemTime},
     u64,
 };
 use tokio::sync::oneshot;
@@ -52,7 +51,7 @@ pub(crate) fn arg_double(arr: &[RESPValue], i: usize) -> Result<f64, CmdError> {
         .ok_or(CmdError::NotDouble)
 }
 
-fn parse_expiry(args: &[RESPValue]) -> Result<Option<Instant>, CmdError> {
+fn parse_expiry(args: &[RESPValue]) -> Result<Option<SystemTime>, CmdError> {
     if args.is_empty() {
         return Ok(None);
     }
@@ -61,8 +60,8 @@ fn parse_expiry(args: &[RESPValue]) -> Result<Option<Instant>, CmdError> {
     let uint = arg_uint(args, 1)?;
 
     match str.to_lowercase().as_str() {
-        "ex" => Ok(Some(Instant::now().add(Duration::from_secs(uint)))),
-        "px" => Ok(Some(Instant::now().add(Duration::from_millis(uint)))),
+        "ex" => Ok(Some(SystemTime::now() + Duration::from_secs(uint))),
+        "px" => Ok(Some(SystemTime::now() + Duration::from_millis(uint))),
         _ => Err(CmdError::Syntax),
     }
 }
@@ -176,7 +175,11 @@ fn cmd_get(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
     let key = arg_bytes(&arr, 1)?;
     let mut lock = store.lock().unwrap();
     match lock.entries.get(key) {
-        Some(val) if val.expires_at.map_or(false, |inst| Instant::now() >= inst) => {
+        Some(val)
+            if val
+                .expires_at
+                .map_or(false, |inst| SystemTime::now() >= inst) =>
+        {
             lock.entries.remove(key);
             Ok(RESPValue::BulkString(None))
         }
@@ -650,10 +653,7 @@ fn cmd_config(
         _ => return Ok(RESPValue::BulkString(None)),
     };
 
-    match value {
-        Some(s) => Ok(array(vec![key.to_string(), s.clone()])),
-        None => Ok(RESPValue::Array(None)),
-    }
+    Ok(array(vec![key.to_string(), value.clone()]))
 }
 
 pub(crate) async fn execute_command(

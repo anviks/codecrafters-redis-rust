@@ -1,17 +1,24 @@
 use crate::{
     commands::execute_command,
     connection::Connection,
+    rdb::parse_rdb,
     resp::{RESPValue, array, encode},
     store::{SharedStore, Store},
 };
 use clap::Parser;
-use std::sync::{Arc, Mutex};
+use std::{
+    fs,
+    path::PathBuf,
+    process::exit,
+    sync::{Arc, Mutex},
+};
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
 mod commands;
 mod connection;
+mod rdb;
 mod resp;
 mod store;
 mod stream;
@@ -74,9 +81,7 @@ async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedC
                 ]);
                 conn.stream.write_all(&encode(&reply)).await.ok();
             } else {
-                execute_command(&cmd, &argv, &store, &config)
-                    .await
-                    .ok();
+                execute_command(&cmd, &argv, &store, &config).await.ok();
             }
         };
 
@@ -86,8 +91,8 @@ async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedC
 
 struct Config {
     is_replica: bool,
-    dir: Option<String>,
-    dbfilename: Option<String>,
+    dir: String,
+    dbfilename: String,
 }
 
 type SharedConfig = Arc<Config>;
@@ -100,11 +105,11 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 
-    #[arg(long)]
-    dir: Option<String>,
+    #[arg(long, default_value_t = String::from("."))]
+    dir: String,
 
-    #[arg(long)]
-    dbfilename: Option<String>,
+    #[arg(long, default_value_t = String::from("dump.rdb"))]
+    dbfilename: String,
 }
 
 #[tokio::main]
@@ -162,6 +167,25 @@ async fn main() {
         conn.read_rdb().await;
 
         tokio::spawn(handle_master(conn, Arc::clone(&store), Arc::clone(&config)));
+    } else {
+        let mut path = PathBuf::from(&config.dir);
+        if !path.exists() {
+            if let Err(e) = fs::create_dir_all(&path) {
+                eprintln!("{e}");
+                exit(1);
+            }
+        }
+
+        path.push(&config.dbfilename);
+
+        if path.exists() {
+            let rdb = fs::read(path).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                exit(1);
+            });
+
+            store.lock().unwrap().entries = parse_rdb(&rdb);
+        }
     }
 
     loop {

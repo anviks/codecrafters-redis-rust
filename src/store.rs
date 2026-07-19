@@ -2,7 +2,7 @@ use crate::{resp::CmdError, stream::Stream};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, atomic::AtomicU64},
-    time::Instant,
+    time::SystemTime,
     u64,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -82,7 +82,7 @@ impl Data {
 #[derive(Clone, Debug)]
 pub(crate) struct Value {
     pub(crate) data: Data,
-    pub(crate) expires_at: Option<Instant>,
+    pub(crate) expires_at: Option<SystemTime>,
 }
 
 pub(crate) struct Replica {
