@@ -38,6 +38,15 @@ impl SortedSet {
 
         is_new
     }
+
+    pub(crate) fn rank(&self, member: &[u8]) -> Option<usize> {
+        let Some(score) = self.by_member.get(member) else {
+            return None;
+        };
+        let entry = self.by_score.get(&(*score, member.to_vec())).unwrap();
+
+        Some(self.by_score.range(..entry).count())
+    }
 }
 
 #[derive(Clone, Debug)]

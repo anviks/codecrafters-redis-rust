@@ -689,7 +689,7 @@ fn cmd_publish(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdE
 fn cmd_zadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg_bytes(arr, 1)?;
     let score = arg_double(arr, 2)?;
-    let value = arg_bytes(arr, 3)?;
+    let member = arg_bytes(arr, 3)?;
 
     let mut lock = store.lock().unwrap();
     let entry = lock.entries.entry(key.clone()).or_insert(Value {
@@ -698,7 +698,22 @@ fn cmd_zadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     });
     let set = entry.data.try_set_mut()?;
 
-    Ok(RESPValue::Integer(set.insert(value.clone(), score).into()))
+    Ok(RESPValue::Integer(set.insert(member.clone(), score).into()))
+}
+
+fn cmd_zrank(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let member = arg_bytes(arr, 2)?;
+
+    let lock = store.lock().unwrap();
+
+    if let Some(val) = lock.entries.get(key)
+        && let Some(rank) = val.data.try_set()?.rank(member)
+    {
+        Ok(RESPValue::Integer(rank as i64))
+    } else {
+        Ok(RESPValue::BulkString(None))
+    }
 }
 
 pub(crate) async fn execute_command(
@@ -729,6 +744,7 @@ pub(crate) async fn execute_command(
         "keys" => cmd_keys(&store),
         "publish" => cmd_publish(&arr, &store),
         "zadd" => cmd_zadd(&arr, &store),
+        "zrank" => cmd_zrank(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
