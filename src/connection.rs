@@ -120,7 +120,7 @@ impl Connection {
         match cmd.as_str() {
             "ping" => {
                 if in_sub_mode {
-                    Ok(Some(array(vec!["PONG", ""])))
+                    Ok(Some(array(vec!["pong", ""])))
                 } else {
                     Ok(Some(RESPValue::SimpleString("PONG".to_string())))
                 }
