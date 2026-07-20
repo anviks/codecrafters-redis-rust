@@ -26,6 +26,7 @@ fn is_write_command(cmd: &str) -> bool {
 }
 
 pub(crate) struct Connection {
+    id: u64,
     pub(crate) stream: TcpStream,
     buf: Vec<u8>,
     cmd_queue: Vec<(String, Vec<RESPValue>)>,
@@ -35,8 +36,9 @@ pub(crate) struct Connection {
 }
 
 impl Connection {
-    pub(crate) fn new(stream: TcpStream) -> Self {
+    pub(crate) fn new(stream: TcpStream, id: u64) -> Self {
         Self {
+            id,
             stream,
             buf: vec![],
             cmd_queue: vec![],
@@ -104,7 +106,7 @@ impl Connection {
             && ![
                 "subscribe",
                 "unsubscribe",
-                "psubscibe",
+                "psubscribe",
                 "punsubscribe",
                 "ping",
                 "quit",
@@ -125,12 +127,29 @@ impl Connection {
                     .channel_subscriptions
                     .entry(key.clone())
                     .or_default()
-                    .push(self.subscription_sender.clone().expect(
-                        "subscription_sender should be set when Connection::dispatch is called",
-                    ));
+                    .insert(
+                        self.id,
+                        self.subscription_sender.clone().expect(
+                            "subscription_sender should be set when Connection::dispatch is called",
+                        ),
+                    );
 
                 Ok(Some(array_of(vec![
                     "subscribe".to_string().into(),
+                    key.clone().into(),
+                    (self.subscribed_channels.len() as i64).into(),
+                ])))
+            }
+            "unsubscribe" => {
+                let key = arg_bytes(&argv, 1)?;
+                self.subscribed_channels.remove(key);
+
+                if let Some(subs) = store.lock().unwrap().channel_subscriptions.get_mut(key) {
+                    subs.remove(&self.id);
+                }
+
+                Ok(Some(array_of(vec![
+                    "unsubscribe".to_string().into(),
                     key.clone().into(),
                     (self.subscribed_channels.len() as i64).into(),
                 ])))

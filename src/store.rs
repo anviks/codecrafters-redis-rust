@@ -95,10 +95,12 @@ pub(crate) struct Store {
     pub(crate) blpop_waiters: HashMap<Vec<u8>, VecDeque<oneshot::Sender<Vec<u8>>>>,
     pub(crate) xread_waiters: HashMap<u64, oneshot::Sender<()>>,
     pub(crate) xread_waiters_by_key: HashMap<Vec<u8>, VecDeque<u64>>,
-    pub(crate) next_id: u64,
+    pub(crate) next_xread_waiter_id: u64,
     pub(crate) replicas: Vec<Replica>,
     pub(crate) master_offset: u64,
-    pub(crate) channel_subscriptions: HashMap<Vec<u8>, Vec<mpsc::UnboundedSender<Vec<u8>>>>,
+    pub(crate) next_connection_id: u64,
+    pub(crate) channel_subscriptions:
+        HashMap<Vec<u8>, HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>,
 }
 
 pub(crate) type SharedStore = Arc<Mutex<Store>>;
@@ -110,16 +112,22 @@ impl Store {
             blpop_waiters: HashMap::new(),
             xread_waiters: HashMap::new(),
             xread_waiters_by_key: HashMap::new(),
-            next_id: 1,
+            next_xread_waiter_id: 1,
             replicas: vec![],
             master_offset: 0,
+            next_connection_id: 1,
             channel_subscriptions: HashMap::new(),
         }
     }
 
+    pub(crate) fn get_next_connection_id(&mut self) -> u64 {
+        self.next_connection_id += 1;
+        self.next_connection_id - 1
+    }
+
     pub(crate) fn add_xread_waiter(&mut self, waiter: oneshot::Sender<()>) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.next_xread_waiter_id;
+        self.next_xread_waiter_id += 1;
         self.xread_waiters.insert(id, waiter);
         id
     }

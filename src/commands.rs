@@ -671,22 +671,25 @@ fn cmd_publish(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdE
         .get_mut(channel_name)
     {
         Some(subscribers) => {
-            let mut i = 0;
-            while i < subscribers.len() {
-                let sub = &subscribers[i];
+            let mut sent = 0;
+            let mut to_remove = vec![];
+
+            for (id, sub) in subscribers.iter() {
                 match sub.send(encode(&array(vec![
                     b"message".to_vec(),
                     channel_name.clone(),
                     message.clone(),
                 ]))) {
-                    Ok(_) => i += 1,
-                    Err(_) => {
-                        subscribers.remove(i);
-                    }
+                    Ok(_) => sent += 1,
+                    Err(_) => to_remove.push(*id),
                 };
             }
 
-            subscribers.len() as i64
+            for id in to_remove {
+                subscribers.remove(&id);
+            }
+
+            sent
         }
         None => 0,
     };

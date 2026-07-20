@@ -153,7 +153,8 @@ async fn main() {
     let master_addr = args.replicaof.as_ref().map(|s| s.replace(" ", ":"));
     if let Some(addr) = master_addr {
         let stream = TcpStream::connect(addr).await.unwrap();
-        let mut conn = Connection::new(stream);
+        let conn_id = store.lock().unwrap().get_next_connection_id();
+        let mut conn = Connection::new(stream, conn_id);
 
         communicate(
             &mut conn,
@@ -214,8 +215,9 @@ async fn main() {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                let conn_id = store.lock().unwrap().get_next_connection_id();
                 tokio::spawn(handle_client(
-                    Connection::new(stream),
+                    Connection::new(stream, conn_id),
                     Arc::clone(&store),
                     Arc::clone(&config),
                 ));
