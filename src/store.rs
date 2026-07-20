@@ -98,6 +98,7 @@ pub(crate) struct Store {
     pub(crate) next_id: u64,
     pub(crate) replicas: Vec<Replica>,
     pub(crate) master_offset: u64,
+    pub(crate) channel_subscriptions: HashMap<Vec<u8>, Vec<mpsc::UnboundedSender<Vec<u8>>>>,
 }
 
 pub(crate) type SharedStore = Arc<Mutex<Store>>;
@@ -112,6 +113,7 @@ impl Store {
             next_id: 1,
             replicas: vec![],
             master_offset: 0,
+            channel_subscriptions: HashMap::new(),
         }
     }
 

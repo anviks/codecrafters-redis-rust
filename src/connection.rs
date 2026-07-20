@@ -1,10 +1,11 @@
 use crate::{
     SharedConfig,
-    commands::{arg_str, arg_uint, execute_command},
-    resp::{CmdError, RESPValue, array, encode, resp_result, try_decode},
+    commands::{arg_bytes, arg_str, arg_uint, execute_command},
+    resp::{CmdError, RESPValue, array, array_of, encode, resp_result, try_decode},
     store::{Replica, SharedStore},
 };
 use std::{
+    collections::HashSet,
     fs,
     sync::{
         Arc,
@@ -29,6 +30,8 @@ pub(crate) struct Connection {
     buf: Vec<u8>,
     cmd_queue: Vec<(String, Vec<RESPValue>)>,
     in_transaction: bool,
+    pub(crate) subscribed_channels: HashSet<Vec<u8>>,
+    pub(crate) subscription_sender: Option<mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 impl Connection {
@@ -38,6 +41,8 @@ impl Connection {
             buf: vec![],
             cmd_queue: vec![],
             in_transaction: false,
+            subscribed_channels: HashSet::new(),
+            subscription_sender: None,
         }
     }
 
@@ -94,8 +99,42 @@ impl Connection {
         argv: Vec<RESPValue>,
         store: &SharedStore,
         config: &SharedConfig,
-    ) -> Option<RESPValue> {
-        let result = match cmd.as_str() {
+    ) -> Result<Option<RESPValue>, CmdError> {
+        if !self.subscribed_channels.is_empty()
+            && ![
+                "subscribe",
+                "unsubscribe",
+                "psubscibe",
+                "punsubscribe",
+                "ping",
+                "quit",
+            ]
+            .contains(&cmd.as_str())
+        {
+            return Err(CmdError::NotSubModeCmd(cmd));
+        }
+
+        match cmd.as_str() {
+            "subscribe" => {
+                let key = arg_bytes(&argv, 1)?;
+                self.subscribed_channels.insert(key.clone());
+
+                store
+                    .lock()
+                    .unwrap()
+                    .channel_subscriptions
+                    .entry(key.clone())
+                    .or_default()
+                    .push(self.subscription_sender.clone().expect(
+                        "subscription_sender should be set when Connection::dispatch is called",
+                    ));
+
+                Ok(Some(array_of(vec![
+                    "subscribe".to_string().into(),
+                    key.clone().into(),
+                    (self.subscribed_channels.len() as i64).into(),
+                ])))
+            }
             "exec" => {
                 if !self.in_transaction {
                     Err(CmdError::ExecWithoutMulti)
@@ -108,7 +147,7 @@ impl Connection {
                     self.cmd_queue.clear();
                     self.in_transaction = false;
 
-                    Ok(array(results))
+                    Ok(Some(array(results)))
                 }
             }
             "multi" => {
@@ -116,7 +155,7 @@ impl Connection {
                     Err(CmdError::NestedMulti)
                 } else {
                     self.in_transaction = true;
-                    Ok(RESPValue::SimpleString("OK".to_string()))
+                    Ok(Some(RESPValue::SimpleString("OK".to_string())))
                 }
             }
             "discard" => {
@@ -125,7 +164,7 @@ impl Connection {
                 } else {
                     self.in_transaction = false;
                     self.cmd_queue.clear();
-                    Ok(RESPValue::SimpleString("OK".to_string()))
+                    Ok(Some(RESPValue::SimpleString("OK".to_string())))
                 }
             }
             "psync" => {
@@ -176,11 +215,11 @@ impl Connection {
                     }
                 }
 
-                return None;
+                return Ok(None);
             }
             _ if self.in_transaction => {
                 self.cmd_queue.push((cmd, argv));
-                Ok(RESPValue::SimpleString("QUEUED".to_string()))
+                Ok(Some(RESPValue::SimpleString("QUEUED".to_string())))
             }
             _ => {
                 let result = execute_command(&cmd, &argv, store, config).await;
@@ -192,10 +231,8 @@ impl Connection {
                         replica.sender.send(encoded.clone()).ok();
                     }
                 }
-                result
+                result.map(|resp| Some(resp))
             }
-        };
-
-        Some(resp_result(result))
+        }
     }
 }

@@ -570,7 +570,7 @@ fn cmd_info(
     if let Ok(s) = arg_str(&arr, 1) {
         match sections.get(&s.to_lowercase()) {
             Some(section) => Ok(section.to_string().into()),
-            None => todo!(),
+            None => Ok("".to_string().into()),
         }
     } else {
         Ok(sections
@@ -660,6 +660,40 @@ fn cmd_keys(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     Ok(array(store.lock().unwrap().entries.keys().cloned()))
 }
 
+fn cmd_publish(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let channel_name = arg_bytes(arr, 1)?;
+    let message = arg_bytes(arr, 2)?;
+
+    let sub_count = match store
+        .lock()
+        .unwrap()
+        .channel_subscriptions
+        .get_mut(channel_name)
+    {
+        Some(subscribers) => {
+            let mut i = 0;
+            while i < subscribers.len() {
+                let sub = &subscribers[i];
+                match sub.send(encode(&array(vec![
+                    b"message".to_vec(),
+                    channel_name.clone(),
+                    message.clone(),
+                ]))) {
+                    Ok(_) => i += 1,
+                    Err(_) => {
+                        subscribers.remove(i);
+                    }
+                };
+            }
+
+            subscribers.len() as i64
+        }
+        None => 0,
+    };
+
+    Ok(sub_count.into())
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -687,6 +721,7 @@ pub(crate) async fn execute_command(
         "wait" => cmd_wait(&arr, &store).await,
         "config" => cmd_config(&arr, &store, &config),
         "keys" => cmd_keys(&arr, &store),
+        "publish" => cmd_publish(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }

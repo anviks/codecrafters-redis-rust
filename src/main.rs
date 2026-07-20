@@ -2,7 +2,7 @@ use crate::{
     commands::execute_command,
     connection::Connection,
     rdb::parse_rdb,
-    resp::{RESPValue, array, encode},
+    resp::{RESPValue, array, encode, resp_result},
     store::{SharedStore, Store},
 };
 use clap::Parser;
@@ -15,6 +15,7 @@ use std::{
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
+    sync::mpsc,
 };
 mod commands;
 mod connection;
@@ -40,22 +41,44 @@ fn parse_command(frame: RESPValue) -> Option<(String, Vec<RESPValue>)> {
 }
 
 async fn handle_client(mut conn: Connection, store: SharedStore, config: SharedConfig) {
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    conn.subscription_sender = Some(sender);
+
     loop {
-        let Some((frame, _)) = conn.read_frame().await else {
-            break;
-        };
-
-        let Some((cmd, argv)) = parse_command(frame) else {
-            continue;
-        };
-
-        match conn.dispatch(cmd, argv, &store, &config).await {
-            Some(respvalue) => {
-                if conn.stream.write_all(&encode(&respvalue)).await.is_err() {
+        tokio::select! {
+            frame = conn.read_frame() => {
+                let Some((frame, _)) = frame else {
                     break;
+                };
+
+                let Some((cmd, argv)) = parse_command(frame) else {
+                    continue;
+                };
+
+                match conn.dispatch(cmd, argv, &store, &config).await.transpose() {
+                    Some(respvalue) => {
+                        if conn
+                            .stream
+                            .write_all(&encode(&resp_result(respvalue)))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    None => {}
                 }
             }
-            None => {}
+            sub_msg = receiver.recv() => {
+                match sub_msg {
+                    Some(bytes) => {
+                        if conn.stream.write_all(&bytes).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
         }
     }
 }
