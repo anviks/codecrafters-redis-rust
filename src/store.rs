@@ -55,6 +55,10 @@ impl SortedSet {
             .take(stop - start + 1)
             .collect()
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.by_score.len()
+    }
 }
 
 #[derive(Clone, Debug)]

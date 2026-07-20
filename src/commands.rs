@@ -718,16 +718,34 @@ fn cmd_zrank(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
 
 fn cmd_zrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg_bytes(arr, 1)?;
-    let start = arg_uint(arr, 2)? as usize;
-    let stop = arg_uint(arr, 3)? as usize;
 
     let lock = store.lock().unwrap();
 
     if let Some(val) = lock.entries.get(key) {
+        let set = val.data.try_set()?;
+
+        let start: usize = {
+            let s = arg_int(arr, 2)?;
+
+            if s < 0 {
+                (set.len() as i64 + s).max(0) as usize
+            } else {
+                s as usize
+            }
+        };
+
+        let stop: usize = {
+            let s = arg_int(&arr, 3)?.min((set.len() - 1) as i64);
+
+            if s < 0 {
+                (set.len() as i64 + s).max(0) as usize
+            } else {
+                s as usize
+            }
+        };
+
         Ok(array(
-            val.data
-                .try_set()?
-                .range(start, stop)
+            set.range(start, stop)
                 .iter()
                 .map(|(_, mem)| mem.as_slice())
                 .collect::<Vec<&[u8]>>(),
