@@ -766,6 +766,21 @@ fn cmd_zcard(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
     }
 }
 
+fn cmd_zscore(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let member = arg_bytes(arr, 2)?;
+
+    let lock = store.lock().unwrap();
+
+    if let Some(val) = lock.entries.get(key)
+        && let Some(score) = val.data.try_set()?.score(member)
+    {
+        Ok(score.to_string().into())
+    } else {
+        Ok(RESPValue::BulkString(None))
+    }
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -797,6 +812,7 @@ pub(crate) async fn execute_command(
         "zrank" => cmd_zrank(&arr, &store),
         "zrange" => cmd_zrange(&arr, &store),
         "zcard" => cmd_zcard(&arr, &store),
+        "zscore" => cmd_zscore(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
