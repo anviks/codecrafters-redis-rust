@@ -60,6 +60,16 @@ impl SortedSet {
             .collect()
     }
 
+    pub(crate) fn remove(&mut self, member: &[u8]) -> bool {
+        match self.by_member.remove(member) {
+            Some(f) => {
+                self.by_score.remove(&(f, member.to_vec()));
+                true
+            }
+            None => false,
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.by_score.len()
     }

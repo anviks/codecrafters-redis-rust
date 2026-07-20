@@ -781,6 +781,20 @@ fn cmd_zscore(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     }
 }
 
+fn cmd_zrem(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let member = arg_bytes(arr, 2)?;
+
+    let mut lock = store.lock().unwrap();
+    if let Some(val) = lock.entries.get_mut(key) {
+        Ok(RESPValue::Integer(
+            val.data.try_set_mut()?.remove(member).into(),
+        ))
+    } else {
+        Ok(0.into())
+    }
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -813,6 +827,7 @@ pub(crate) async fn execute_command(
         "zrange" => cmd_zrange(&arr, &store),
         "zcard" => cmd_zcard(&arr, &store),
         "zscore" => cmd_zscore(&arr, &store),
+        "zrem" => cmd_zrem(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
