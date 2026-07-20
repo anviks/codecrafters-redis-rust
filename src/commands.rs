@@ -716,6 +716,27 @@ fn cmd_zrank(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
     }
 }
 
+fn cmd_zrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let start = arg_uint(arr, 2)? as usize;
+    let stop = arg_uint(arr, 3)? as usize;
+
+    let lock = store.lock().unwrap();
+
+    if let Some(val) = lock.entries.get(key) {
+        Ok(array(
+            val.data
+                .try_set()?
+                .range(start, stop)
+                .iter()
+                .map(|(_, mem)| mem.as_slice())
+                .collect::<Vec<&[u8]>>(),
+        ))
+    } else {
+        Ok(RESPValue::BulkString(None))
+    }
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -745,6 +766,7 @@ pub(crate) async fn execute_command(
         "publish" => cmd_publish(&arr, &store),
         "zadd" => cmd_zadd(&arr, &store),
         "zrank" => cmd_zrank(&arr, &store),
+        "zrange" => cmd_zrange(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
