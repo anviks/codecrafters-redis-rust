@@ -81,6 +81,13 @@ async fn handle_client(mut conn: Connection, store: SharedStore, config: SharedC
             }
         }
     }
+
+    let mut lock = store.lock().unwrap();
+    for channel in &conn.subscribed_channels {
+        if let Some(subs) = lock.channel_subscriptions.get_mut(channel) {
+            subs.remove(&conn.id);
+        }
+    }
 }
 
 async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedConfig) {

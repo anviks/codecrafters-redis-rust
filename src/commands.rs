@@ -554,7 +554,6 @@ fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
 
 fn cmd_info(
     arr: &[RESPValue],
-    store: &SharedStore,
     config: &SharedConfig,
 ) -> Result<RESPValue, CmdError> {
     let mut sections = HashMap::new();
@@ -634,7 +633,6 @@ async fn cmd_wait(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, C
 
 fn cmd_config(
     arr: &[RESPValue],
-    store: &SharedStore,
     config: &SharedConfig,
 ) -> Result<RESPValue, CmdError> {
     let subcommand = arg_str(arr, 1)?;
@@ -652,7 +650,7 @@ fn cmd_config(
     Ok(array(vec![key, value]))
 }
 
-fn cmd_keys(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+fn cmd_keys(store: &SharedStore) -> Result<RESPValue, CmdError> {
     Ok(array(store.lock().unwrap().entries.keys().cloned()))
 }
 
@@ -714,11 +712,11 @@ pub(crate) async fn execute_command(
         "xrange" => cmd_xrange(&arr, &store),
         "xread" => cmd_xread(&arr, &store).await,
         "incr" => cmd_incr(&arr, &store),
-        "info" => cmd_info(&arr, &store, &config),
+        "info" => cmd_info(&arr, &config),
         "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
         "wait" => cmd_wait(&arr, &store).await,
-        "config" => cmd_config(&arr, &store, &config),
-        "keys" => cmd_keys(&arr, &store),
+        "config" => cmd_config(&arr, &config),
+        "keys" => cmd_keys(&store),
         "publish" => cmd_publish(&arr, &store),
         _ => Err(CmdError::Unknown),
     }

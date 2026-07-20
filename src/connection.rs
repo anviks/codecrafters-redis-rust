@@ -26,7 +26,7 @@ fn is_write_command(cmd: &str) -> bool {
 }
 
 pub(crate) struct Connection {
-    id: u64,
+    pub(crate) id: u64,
     pub(crate) stream: TcpStream,
     buf: Vec<u8>,
     cmd_queue: Vec<(String, Vec<RESPValue>)>,

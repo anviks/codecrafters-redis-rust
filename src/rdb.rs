@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 
 use crate::store::{Data, Value};
@@ -68,7 +68,7 @@ pub(crate) fn parse_rdb(rdb: &[u8]) -> HashMap<Vec<u8>, Value> {
     let mut i = 9;
 
     while i < rdb.len() && rdb[i] != 0xFE {
-        assert_eq!(rdb[i], 0xFA);  // AUX
+        assert_eq!(rdb[i], 0xFA); // AUX
         i += 1;
         let (key, j) = read_value(&rdb[i..]);
         i += j;
