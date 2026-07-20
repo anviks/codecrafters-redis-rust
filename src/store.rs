@@ -1,6 +1,9 @@
-use crate::{resp::CmdError, stream::Stream};
+use crate::{
+    common::{CmdError, OrderedF64},
+    stream::Stream,
+};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     sync::{Arc, Mutex, atomic::AtomicU64},
     time::SystemTime,
     u64,
@@ -8,9 +11,40 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug)]
+pub(crate) struct SortedSet {
+    by_score: BTreeSet<(OrderedF64, Vec<u8>)>,
+    by_member: HashMap<Vec<u8>, OrderedF64>,
+}
+
+impl SortedSet {
+    pub(crate) fn new() -> Self {
+        Self {
+            by_score: BTreeSet::new(),
+            by_member: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, member: Vec<u8>, score: f64) -> bool {
+        let score = OrderedF64::new(score).unwrap();
+        let is_new = match self.by_member.insert(member.clone(), score) {
+            Some(prev_score) => {
+                self.by_score.remove(&(prev_score, member.clone()));
+                false
+            }
+            None => true,
+        };
+
+        self.by_score.insert((score, member));
+
+        is_new
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum Data {
     String(Vec<u8>),
     List(VecDeque<Vec<u8>>),
+    SortedSet(SortedSet),
     Stream(Stream),
 }
 
@@ -50,6 +84,20 @@ impl Data {
         }
     }
 
+    pub(crate) fn as_set(&self) -> Option<&SortedSet> {
+        match self {
+            Data::SortedSet(btree_set) => Some(btree_set),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_set_mut(&mut self) -> Option<&mut SortedSet> {
+        match self {
+            Data::SortedSet(btree_set) => Some(btree_set),
+            _ => None,
+        }
+    }
+
     pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
         self.as_str().ok_or(CmdError::WrongType)
     }
@@ -70,11 +118,20 @@ impl Data {
         self.as_stream_mut().ok_or(CmdError::WrongType)
     }
 
+    pub(crate) fn try_set(&self) -> Result<&SortedSet, CmdError> {
+        self.as_set().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_set_mut(&mut self) -> Result<&mut SortedSet, CmdError> {
+        self.as_set_mut().ok_or(CmdError::WrongType)
+    }
+
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Data::String(_) => "string",
             Data::List(_) => "list",
             Data::Stream(_) => "stream",
+            Data::SortedSet(_) => "zset",
         }
     }
 }

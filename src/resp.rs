@@ -1,52 +1,6 @@
 #![allow(dead_code)]
-use thiserror::Error;
 
-#[derive(Error, Debug)]
-pub(crate) enum CmdError {
-    #[error(
-        "ERR Can't execute '{0}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
-    )]
-    NotSubModeCmd(String),
-
-    #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
-    WrongType,
-
-    #[error("ERR value is not an integer or out of range")]
-    NotInt,
-
-    #[error("ERR value is not an integer or out of range")]
-    NotUint,
-
-    #[error("ERR value is not a double or out of range")]
-    NotDouble,
-
-    #[error("Invalid stream ID specified as stream command argument")]
-    InvalidStreamId,
-
-    #[error("ERR The ID specified in XADD is equal or smaller than the target stream top item")]
-    BadStreamId,
-
-    #[error("ERR The ID specified in XADD must be greater than 0-0")]
-    ZeroStreamId,
-
-    #[error("ERR EXEC without MULTI")]
-    ExecWithoutMulti,
-
-    #[error("ERR DISCARD without MULTI")]
-    DiscardWithoutMulti,
-
-    #[error("ERR MULTI calls can not be nested")]
-    NestedMulti,
-
-    #[error("ERR wrong number of arguments for command")]
-    WrongArgs,
-
-    #[error("ERR syntax error")]
-    Syntax,
-
-    #[error("ERR unknown command")]
-    Unknown,
-}
+use crate::common::CmdError;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RESPValue {

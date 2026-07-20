@@ -1,7 +1,8 @@
 use crate::{
     SharedConfig,
     commands::{arg_bytes, arg_str, arg_uint, execute_command},
-    resp::{CmdError, RESPValue, array, array_of, encode, resp_result, try_decode},
+    common::CmdError,
+    resp::{RESPValue, array, array_of, encode, resp_result, try_decode},
     store::{Replica, SharedStore},
 };
 use std::{

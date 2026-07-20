@@ -1,4 +1,4 @@
-use crate::resp::CmdError;
+use crate::common::CmdError;
 use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},

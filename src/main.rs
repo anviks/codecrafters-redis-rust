@@ -1,5 +1,6 @@
 use crate::{
     commands::execute_command,
+    common::{Config, SharedConfig},
     connection::Connection,
     rdb::parse_rdb,
     resp::{RESPValue, array, encode, resp_result},
@@ -18,6 +19,7 @@ use tokio::{
     sync::mpsc,
 };
 mod commands;
+mod common;
 mod connection;
 mod rdb;
 mod resp;
@@ -114,14 +116,6 @@ async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedC
         offset += consumed;
     }
 }
-
-struct Config {
-    is_replica: bool,
-    dir: String,
-    dbfilename: String,
-}
-
-type SharedConfig = Arc<Config>;
 
 #[derive(Parser, Clone, Debug)]
 struct Args {

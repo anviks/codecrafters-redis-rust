@@ -1,7 +1,8 @@
 use crate::{
     SharedConfig,
-    resp::{CmdError, RESPValue, array, array_of, encode},
-    store::{Data, SharedStore, Store, Value},
+    common::CmdError,
+    resp::{RESPValue, array, array_of, encode},
+    store::{Data, SharedStore, SortedSet, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
 };
 use std::{
@@ -552,10 +553,7 @@ fn cmd_incr(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     Ok(RESPValue::Integer(new_num))
 }
 
-fn cmd_info(
-    arr: &[RESPValue],
-    config: &SharedConfig,
-) -> Result<RESPValue, CmdError> {
+fn cmd_info(arr: &[RESPValue], config: &SharedConfig) -> Result<RESPValue, CmdError> {
     let mut sections = HashMap::new();
     let role = if config.is_replica { "slave" } else { "master" };
     sections.insert(
@@ -631,10 +629,7 @@ async fn cmd_wait(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, C
     Ok(RESPValue::Integer(up_to_date as i64))
 }
 
-fn cmd_config(
-    arr: &[RESPValue],
-    config: &SharedConfig,
-) -> Result<RESPValue, CmdError> {
+fn cmd_config(arr: &[RESPValue], config: &SharedConfig) -> Result<RESPValue, CmdError> {
     let subcommand = arg_str(arr, 1)?;
     if !subcommand.eq_ignore_ascii_case("GET") {
         return Err(CmdError::Syntax);
@@ -691,6 +686,21 @@ fn cmd_publish(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdE
     Ok(sub_count.into())
 }
 
+fn cmd_zadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let score = arg_double(arr, 2)?;
+    let value = arg_bytes(arr, 3)?;
+
+    let mut lock = store.lock().unwrap();
+    let entry = lock.entries.entry(key.clone()).or_insert(Value {
+        data: Data::SortedSet(SortedSet::new()),
+        expires_at: None,
+    });
+    let set = entry.data.try_set_mut()?;
+
+    Ok(RESPValue::Integer(set.insert(value.clone(), score).into()))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -718,6 +728,7 @@ pub(crate) async fn execute_command(
         "config" => cmd_config(&arr, &config),
         "keys" => cmd_keys(&store),
         "publish" => cmd_publish(&arr, &store),
+        "zadd" => cmd_zadd(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
