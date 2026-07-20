@@ -751,7 +751,7 @@ fn cmd_zrange(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
                 .collect::<Vec<&[u8]>>(),
         ))
     } else {
-        Ok(RESPValue::BulkString(None))
+        Ok(RESPValue::Array(Some(vec![])))
     }
 }
 
