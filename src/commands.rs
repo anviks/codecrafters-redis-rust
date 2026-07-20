@@ -569,8 +569,8 @@ fn cmd_info(
 
     if let Ok(s) = arg_str(&arr, 1) {
         match sections.get(&s.to_lowercase()) {
-            Some(section) => Ok(section.to_string().into()),
-            None => Ok("".to_string().into()),
+            Some(section) => Ok(section.as_str().into()),
+            None => Ok("".into()),
         }
     } else {
         Ok(sections
@@ -586,11 +586,7 @@ async fn cmd_wait(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, C
     let numreplicas = arg_uint(arr, 1)?;
     let timeout = arg_uint(arr, 2)?;
 
-    let msg = encode(&array(vec![
-        "REPLCONF".to_string(),
-        "GETACK".to_string(),
-        "*".to_string(),
-    ]));
+    let msg = encode(&array(vec!["REPLCONF", "GETACK", "*"]));
 
     let target = {
         let lock = store.lock().unwrap();
@@ -653,7 +649,7 @@ fn cmd_config(
         _ => return Ok(RESPValue::BulkString(None)),
     };
 
-    Ok(array(vec![key.to_string(), value.clone()]))
+    Ok(array(vec![key, value]))
 }
 
 fn cmd_keys(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
@@ -704,7 +700,6 @@ pub(crate) async fn execute_command(
     config: &SharedConfig,
 ) -> Result<RESPValue, CmdError> {
     match command {
-        "ping" => Ok(RESPValue::SimpleString("PONG".to_string())),
         "echo" if arr.len() > 1 => Ok(arr[1].clone()),
         "get" => cmd_get(&arr, &store),
         "set" => cmd_set(&arr, &store),

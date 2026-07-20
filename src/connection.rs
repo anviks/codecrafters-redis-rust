@@ -102,7 +102,8 @@ impl Connection {
         store: &SharedStore,
         config: &SharedConfig,
     ) -> Result<Option<RESPValue>, CmdError> {
-        if !self.subscribed_channels.is_empty()
+        let in_sub_mode = !self.subscribed_channels.is_empty();
+        if in_sub_mode
             && ![
                 "subscribe",
                 "unsubscribe",
@@ -117,6 +118,13 @@ impl Connection {
         }
 
         match cmd.as_str() {
+            "ping" => {
+                if in_sub_mode {
+                    Ok(Some(array(vec!["PONG", ""])))
+                } else {
+                    Ok(Some(RESPValue::SimpleString("PONG".to_string())))
+                }
+            }
             "subscribe" => {
                 let key = arg_bytes(&argv, 1)?;
                 self.subscribed_channels.insert(key.clone());
@@ -135,7 +143,7 @@ impl Connection {
                     );
 
                 Ok(Some(array_of(vec![
-                    "subscribe".to_string().into(),
+                    "subscribe".into(),
                     key.clone().into(),
                     (self.subscribed_channels.len() as i64).into(),
                 ])))

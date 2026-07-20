@@ -91,6 +91,12 @@ impl From<String> for RESPValue {
     }
 }
 
+impl From<&str> for RESPValue {
+    fn from(value: &str) -> Self {
+        RESPValue::BulkString(Some(value.as_bytes().to_vec()))
+    }
+}
+
 impl From<&[u8]> for RESPValue {
     fn from(value: &[u8]) -> Self {
         RESPValue::BulkString(Some(value.to_vec()))

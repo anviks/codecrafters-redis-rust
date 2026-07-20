@@ -97,11 +97,7 @@ async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedC
                     .and_then(|a| a.as_str())
                     .is_some_and(|s| s.eq_ignore_ascii_case("getack"))
             {
-                let reply = array(vec![
-                    "REPLCONF".to_string(),
-                    "ACK".to_string(),
-                    offset.to_string(),
-                ]);
+                let reply = array(vec!["REPLCONF", "ACK", offset.to_string().as_str()]);
                 conn.stream.write_all(&encode(&reply)).await.ok();
             } else {
                 execute_command(&cmd, &argv, &store, &config).await.ok();
@@ -165,28 +161,15 @@ async fn main() {
         communicate(
             &mut conn,
             &array(vec![
-                "REPLCONF".to_string(),
-                "listening-port".to_string(),
-                args.port.to_string(),
+                "REPLCONF",
+                "listening-port",
+                args.port.to_string().as_str(),
             ]),
         )
         .await;
 
-        communicate(
-            &mut conn,
-            &array(vec![
-                "REPLCONF".to_string(),
-                "capa".to_string(),
-                "psync2".to_string(),
-            ]),
-        )
-        .await;
-
-        communicate(
-            &mut conn,
-            &array(vec!["PSYNC".to_string(), "?".to_string(), "-1".to_string()]),
-        )
-        .await;
+        communicate(&mut conn, &array(vec!["REPLCONF", "capa", "psync2"])).await;
+        communicate(&mut conn, &array(vec!["PSYNC", "?", "-1"])).await;
 
         conn.read_rdb().await;
 
