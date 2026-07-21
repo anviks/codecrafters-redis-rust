@@ -824,20 +824,28 @@ fn cmd_geoadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
 
 fn cmd_geopos(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let key = arg_bytes(arr, 1)?;
-    let member = arg_bytes(arr, 2)?;
+    arg(arr, 2)?; // Assert existence of at least one member argument
 
     let lock = store.lock().unwrap();
-    if let Some(val) = lock.entries.get(key)
-        && let Some(score) = val.data.try_set()?.score(member)
-    {
-        let (lon, lat) = decode_coords(score as u64);
-        Ok(array_of(vec![array(vec![
-            lon.to_string(),
-            lat.to_string(),
-        ])]))
-    } else {
-        Ok(RESPValue::Array(None))
+    let mut positions = vec![];
+
+    let mut i = 2;
+    while i < arr.len() {
+        let member = arg_bytes(arr, i)?;
+
+        if let Some(val) = lock.entries.get(key)
+            && let Some(score) = val.data.try_set()?.score(member)
+        {
+            let (lon, lat) = decode_coords(score as u64);
+            positions.push(array(vec![lon.to_string(), lat.to_string()]));
+        } else {
+            positions.push(RESPValue::Array(None));
+        }
+
+        i += 1;
     }
+
+    Ok(array_of(positions))
 }
 
 pub(crate) async fn execute_command(
