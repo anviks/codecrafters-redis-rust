@@ -59,11 +59,10 @@ pub(crate) fn parse_rdb(rdb: &[u8]) -> HashMap<Vec<u8>, Value> {
     let mut entries: HashMap<Vec<u8>, Value> = HashMap::new();
 
     assert_eq!(&rdb[..7], b"REDIS00", "Not an RDB file");
-    assert_eq!(
-        rdb.iter().filter(|b| **b == 0xFE).count(),
-        1,
-        "Multiple databases are not supported"
-    );
+    if rdb.iter().filter(|b| **b == 0xFE).count() > 1 {
+        println!("WARNING: Multiple databases in RDB");
+    }
+
     // Skip REDIS00XX
     let mut i = 9;
 
@@ -91,7 +90,7 @@ pub(crate) fn parse_rdb(rdb: &[u8]) -> HashMap<Vec<u8>, Value> {
     i += read_length(&rdb[i..]).1;
 
     let mut pending_expiry = None;
-    while i < rdb.len() && rdb[i] != 0xFF {
+    while i < rdb.len() && rdb[i] != 0xFF && rdb[i] != 0xFE {
         let val_type = rdb[i];
         i += 1;
 
