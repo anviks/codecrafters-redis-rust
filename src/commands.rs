@@ -901,6 +901,19 @@ fn cmd_geosearch(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cm
     Ok(array(locations))
 }
 
+fn cmd_acl(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    match arg_str(arr, 1)?.to_lowercase().as_str() {
+        "whoami" => Ok("default".into()),
+        "getuser" => Ok(array(vec![
+            "flags".into(),
+            array(vec!["nopass"]),
+            "passwords".into(),
+            array_of(vec![]),
+        ])),
+        _ => Err(CmdError::Syntax),
+    }
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -938,6 +951,7 @@ pub(crate) async fn execute_command(
         "geopos" => cmd_geopos(&arr, &store),
         "geodist" => cmd_geodist(&arr, &store),
         "geosearch" => cmd_geosearch(&arr, &store),
+        "acl" => cmd_acl(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
