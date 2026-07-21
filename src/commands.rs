@@ -6,6 +6,7 @@ use crate::{
     store::{Data, SharedStore, SortedSet, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     sync::atomic::Ordering,
@@ -904,12 +905,46 @@ fn cmd_geosearch(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cm
 fn cmd_acl(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     match arg_str(arr, 1)?.to_lowercase().as_str() {
         "whoami" => Ok("default".into()),
-        "getuser" => Ok(array(vec![
-            "flags".into(),
-            array(vec!["nopass"]),
-            "passwords".into(),
-            array_of(vec![]),
-        ])),
+        "getuser" => {
+            let name = arg_bytes(arr, 2)?;
+            let lock = store.lock().unwrap();
+
+            let Some(passwords) = lock.users.get(name) else {
+                return Ok(RESPValue::Array(None));
+            };
+
+            let mut flags = vec![];
+            if passwords.len() == 0 {
+                flags.push("nopass");
+            }
+
+            Ok(array(vec![
+                "flags".into(),
+                array(flags),
+                "passwords".into(),
+                array(
+                    passwords
+                        .iter()
+                        .map(|pw| pw.iter().map(|b| format!("{:02x}", b)).collect::<String>()),
+                ),
+            ]))
+        }
+        "setuser" => {
+            let name = arg_bytes(arr, 2)?;
+            let mut lock = store.lock().unwrap();
+
+            let passwords = lock.users.entry(name.clone()).or_default();
+
+            if let Ok(pass) = arg_bytes(arr, 3)
+                && pass[0] == b'>'
+            {
+                let mut hash = Sha256::new();
+                hash.update(pass);
+                passwords.push(hash.finalize().into());
+            }
+
+            Ok(RESPValue::SimpleString("OK".to_string()))
+        }
         _ => Err(CmdError::Syntax),
     }
 }
