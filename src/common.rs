@@ -34,6 +34,9 @@ impl OrderedF64 {
 
 #[derive(Error, Debug)]
 pub(crate) enum CmdError {
+    #[error("ERR invalid longitude,latitude pair {longitude},{latitude}")]
+    InvalidCoords { longitude: f64, latitude: f64 },
+
     #[error(
         "ERR Can't execute '{0}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context"
     )]

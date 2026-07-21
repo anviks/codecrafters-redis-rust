@@ -1,6 +1,7 @@
 use crate::{
     SharedConfig,
     common::CmdError,
+    coordinates::{are_valid_coords, decode_coords, encode_coords},
     resp::{RESPValue, array, array_of, encode},
     store::{Data, SharedStore, SortedSet, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
@@ -795,6 +796,50 @@ fn cmd_zrem(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErro
     }
 }
 
+fn cmd_geoadd(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let longitude = arg_double(arr, 2)?;
+    let latitude = arg_double(arr, 3)?;
+    let member = arg_bytes(arr, 4)?;
+
+    if !are_valid_coords(longitude, latitude) {
+        return Err(CmdError::InvalidCoords {
+            longitude,
+            latitude,
+        });
+    }
+
+    let mut lock = store.lock().unwrap();
+    let entry = lock.entries.entry(key.clone()).or_insert(Value {
+        data: Data::SortedSet(SortedSet::new()),
+        expires_at: None,
+    });
+    let set = entry.data.try_set_mut()?;
+
+    Ok(RESPValue::Integer(
+        set.insert(member.clone(), encode_coords(longitude, latitude) as f64)
+            .into(),
+    ))
+}
+
+fn cmd_geopos(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let member = arg_bytes(arr, 2)?;
+
+    let lock = store.lock().unwrap();
+    if let Some(val) = lock.entries.get(key)
+        && let Some(score) = val.data.try_set()?.score(member)
+    {
+        let (lon, lat) = decode_coords(score as u64);
+        Ok(array_of(vec![array(vec![
+            lon.to_string(),
+            lat.to_string(),
+        ])]))
+    } else {
+        Ok(RESPValue::Array(None))
+    }
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -828,6 +873,8 @@ pub(crate) async fn execute_command(
         "zcard" => cmd_zcard(&arr, &store),
         "zscore" => cmd_zscore(&arr, &store),
         "zrem" => cmd_zrem(&arr, &store),
+        "geoadd" => cmd_geoadd(&arr, &store),
+        "geopos" => cmd_geopos(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }

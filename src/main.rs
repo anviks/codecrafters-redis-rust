@@ -21,6 +21,7 @@ use tokio::{
 mod commands;
 mod common;
 mod connection;
+mod coordinates;
 mod rdb;
 mod resp;
 mod store;

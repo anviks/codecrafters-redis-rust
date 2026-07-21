@@ -101,11 +101,6 @@ pub(crate) fn parse_rdb(rdb: &[u8]) -> HashMap<Vec<u8>, Value> {
                 i += j;
                 let (val, j) = read_value(&rdb[i..]);
                 i += j;
-                println!(
-                    "String: {} -> {}; Expiry: {pending_expiry:?}",
-                    String::from_utf8_lossy(&key),
-                    String::from_utf8_lossy(&val)
-                );
                 entries.insert(
                     key,
                     Value {
