@@ -872,6 +872,35 @@ fn cmd_geodist(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdE
     Ok(RESPValue::BulkString(None))
 }
 
+fn cmd_geosearch(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    if arg_str(arr, 2)?.to_lowercase() != "fromlonlat"
+        || arg_str(arr, 5)?.to_lowercase() != "byradius"
+        || arg_str(arr, 7)?.to_lowercase() != "m"
+    {
+        return Err(CmdError::Syntax);
+    }
+
+    let key = arg_bytes(arr, 1)?;
+    let lon1 = arg_double(arr, 3)?;
+    let lat1 = arg_double(arr, 4)?;
+    let radius = arg_double(arr, 6)?;
+
+    let mut locations = vec![];
+    let lock = store.lock().unwrap();
+    if let Some(val) = lock.entries.get(key) {
+        let set = val.data.try_set()?;
+        for (score, member) in set.range(0, set.len() - 1) {
+            let (lon2, lat2) = decode_coords(score as u64);
+            let dist = geohash_get_distance(lon1, lat1, lon2, lat2);
+            if dist <= radius {
+                locations.push(member.as_slice());
+            }
+        }
+    }
+
+    Ok(array(locations))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -908,6 +937,7 @@ pub(crate) async fn execute_command(
         "geoadd" => cmd_geoadd(&arr, &store),
         "geopos" => cmd_geopos(&arr, &store),
         "geodist" => cmd_geodist(&arr, &store),
+        "geosearch" => cmd_geosearch(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }

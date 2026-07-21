@@ -52,11 +52,12 @@ impl SortedSet {
         Some(self.by_score.range(..entry).count())
     }
 
-    pub(crate) fn range(&self, start: usize, stop: usize) -> Vec<&(OrderedF64, Vec<u8>)> {
+    pub(crate) fn range(&self, start: usize, stop: usize) -> Vec<(f64, &Vec<u8>)> {
         self.by_score
             .iter()
             .skip(start)
             .take(stop - start + 1)
+            .map(|(score, member)| (score.get(), member))
             .collect()
     }
 
