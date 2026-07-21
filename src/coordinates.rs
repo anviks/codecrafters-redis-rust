@@ -6,6 +6,8 @@ const MAX_LATITUDE: f64 = 85.05112878;
 const LONGITUDE_RANGE: f64 = MAX_LONGITUDE - MIN_LONGITUDE;
 const LATITUDE_RANGE: f64 = MAX_LATITUDE - MIN_LATITUDE;
 
+const EARTH_RADIUS: f64 = 6372797.560856;
+
 pub(crate) fn are_valid_coords(longitude: f64, latitude: f64) -> bool {
     longitude >= MIN_LONGITUDE
         && longitude <= MAX_LONGITUDE
@@ -44,6 +46,9 @@ fn compact_u64_to_u32(n: u64) -> u32 {
     return v as u32;
 }
 
+/**
+ * Source: https://github.com/codecrafters-io/redis-geocoding-algorithm
+ */
 pub(crate) fn encode_coords(longitude: f64, latitude: f64) -> u64 {
     let normalized_longitude =
         ((1 << 26) as f64 * (longitude - MIN_LONGITUDE) / LONGITUDE_RANGE) as u32;
@@ -66,6 +71,9 @@ pub(crate) fn encode_coords(longitude: f64, latitude: f64) -> u64 {
     x | y_shifted
 }
 
+/**
+ * Source: https://github.com/codecrafters-io/redis-geocoding-algorithm
+ */
 pub(crate) fn decode_coords(geo_code: u64) -> (f64, f64) {
     let y = geo_code >> 1;
     let x = geo_code;
@@ -88,4 +96,34 @@ pub(crate) fn decode_coords(geo_code: u64) -> (f64, f64) {
     let longitude = (grid_longitude_min + grid_longitude_max) / 2.0;
 
     return (longitude, latitude);
+}
+
+/* Calculate distance using simplified haversine great circle distance formula.
+ * Given longitude diff is 0 the asin(sqrt(a)) on the haversine is asin(sin(abs(u))).
+ * arcsin(sin(x)) equal to x when x ∈[−𝜋/2,𝜋/2]. Given latitude is between [−𝜋/2,𝜋/2]
+ * we can simplify arcsin(sin(x)) to x.
+ */
+fn geohash_get_lat_distance(lat1d: f64, lat2d: f64) -> f64 {
+    return EARTH_RADIUS * (lat2d.to_radians() - lat1d.to_radians()).abs();
+}
+
+/**
+ * Source: https://github.com/redis/redis/blob/4322cebc1764d433b3fce3b3a108252648bf59e7/src/geohash_helper.c#L228C1-L228C72
+ */
+pub(crate) fn geohash_get_distance(lon1d: f64, lat1d: f64, lon2d: f64, lat2d: f64) -> f64 {
+    let lon1r = lon1d.to_radians();
+    let lon2r = lon2d.to_radians();
+    let lat1r = lat1d.to_radians();
+    let lat2r = lat2d.to_radians();
+
+    let v = ((lon2r - lon1r) / 2.0).sin();
+    /* if v == 0 we can avoid doing expensive math when lons are practically the same */
+    if v == 0.0 {
+        return geohash_get_lat_distance(lat1d, lat2d);
+    }
+
+    let u = ((lat2r - lat1r) / 2.0).sin();
+    let a = u * u + lat1r.cos() * lat2r.cos() * v * v;
+
+    2.0 * EARTH_RADIUS * a.sqrt().asin()
 }

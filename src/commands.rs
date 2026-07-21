@@ -1,7 +1,7 @@
 use crate::{
     SharedConfig,
     common::CmdError,
-    coordinates::{are_valid_coords, decode_coords, encode_coords},
+    coordinates::{are_valid_coords, decode_coords, encode_coords, geohash_get_distance},
     resp::{RESPValue, array, array_of, encode},
     store::{Data, SharedStore, SortedSet, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
@@ -848,6 +848,30 @@ fn cmd_geopos(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     Ok(array_of(positions))
 }
 
+fn cmd_geodist(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let member_1 = arg_bytes(arr, 2)?;
+    let member_2 = arg_bytes(arr, 3)?;
+
+    let lock = store.lock().unwrap();
+
+    if let Some(val) = lock.entries.get(key) {
+        let set = val.data.try_set()?;
+        if let Some(f1) = set.score(member_1)
+            && let Some(f2) = set.score(member_2)
+        {
+            let (lon1d, lat1d) = decode_coords(f1 as u64);
+            let (lon2d, lat2d) = decode_coords(f2 as u64);
+
+            return Ok(geohash_get_distance(lon1d, lat1d, lon2d, lat2d)
+                .to_string()
+                .into());
+        }
+    }
+
+    Ok(RESPValue::BulkString(None))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -883,6 +907,7 @@ pub(crate) async fn execute_command(
         "zrem" => cmd_zrem(&arr, &store),
         "geoadd" => cmd_geoadd(&arr, &store),
         "geopos" => cmd_geopos(&arr, &store),
+        "geodist" => cmd_geodist(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
