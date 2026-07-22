@@ -270,16 +270,16 @@ impl Connection {
                 Ok(Some(RESPValue::SimpleString("QUEUED".to_string())))
             }
             _ => {
-                let result = execute_command(&cmd, &argv, store, config, &self.username).await;
+                let result = execute_command(&cmd, &argv, store, config, &self.username).await?;
                 if is_write_command(&cmd) {
                     let encoded = encode(&RESPValue::Array(Some(argv.clone())));
-                    let mut store = store.lock().unwrap();
-                    store.master_offset += encoded.len() as u64;
-                    for replica in &store.replicas {
+                    let mut lock = store.lock().unwrap();
+                    lock.master_offset += encoded.len() as u64;
+                    for replica in &lock.replicas {
                         replica.sender.send(encoded.clone()).ok();
                     }
                 }
-                result.map(|resp| Some(resp))
+                Ok(Some(result))
             }
         }
     }
