@@ -8,7 +8,8 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -316,6 +317,7 @@ impl Connection {
             }
             _ => {
                 let result = execute_command(&cmd, &argv, store, config, &self.username).await?;
+
                 if is_write_command(&cmd) {
                     let mut lock = store.lock().unwrap();
 
@@ -331,7 +333,17 @@ impl Connection {
                     for replica in &lock.replicas {
                         replica.sender.send(encoded.clone()).ok();
                     }
+
+                    if config.appendonly && config.appendfsync == "always" {
+                        OpenOptions::new()
+                            .append(true)
+                            .open(&config.appendfilepath)
+                            .unwrap()
+                            .write_all(&encode(&array_of(argv)))
+                            .ok();
+                    }
                 }
+
                 Ok(Some(result))
             }
         }

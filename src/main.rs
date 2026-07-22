@@ -162,13 +162,20 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    let dir = resolve_path(&args.dir);
+    let aof_path = dir.join(&args.appenddirname);
+    let aof_filename = args.appendfilename.clone() + ".1.incr.aof";
+    let appendfilepath = aof_path.join(&aof_filename);
+
     let config = Arc::new(Config {
         is_replica: args.replicaof.is_some(),
-        dir: resolve_path(&args.dir),
+        dir,
         dbfilename: args.dbfilename,
         appendonly: args.appendonly,
         appenddirname: args.appenddirname,
         appendfilename: args.appendfilename,
+        appendfilepath: appendfilepath,
         appendfsync: args.appendfsync,
     });
 
@@ -180,16 +187,13 @@ async fn main() {
     }
 
     if config.appendonly {
-        let path = config.dir.join(&config.appenddirname);
-        let aof_file = config.appendfilename.clone() + ".1.incr.aof";
-
-        if !path.exists()
-            && let Err(e) = fs::create_dir(&path)
-                .and_then(|_| fs::write(path.join(&aof_file), ""))
+        if !aof_path.exists()
+            && let Err(e) = fs::create_dir(&aof_path)
+                .and_then(|_| fs::write(&config.appendfilepath, ""))
                 .and_then(|_| {
                     fs::write(
-                        path.join(config.appendfilename.clone() + ".manifest"),
-                        format!("file {} seq 1 type i", aof_file),
+                        aof_path.join(config.appendfilename.clone() + ".manifest"),
+                        format!("file {} seq 1 type i", aof_filename),
                     )
                 })
         {

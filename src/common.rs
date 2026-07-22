@@ -8,6 +8,7 @@ pub(crate) struct Config {
     pub(crate) appendonly: bool,
     pub(crate) appenddirname: String,
     pub(crate) appendfilename: String,
+    pub(crate) appendfilepath: PathBuf,
     pub(crate) appendfsync: String,
 }
 
