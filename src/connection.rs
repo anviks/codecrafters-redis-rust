@@ -1,6 +1,6 @@
 use crate::{
     SharedConfig,
-    commands::{arg_bytes, arg_str, arg_uint, execute_command},
+    commands::{arg, arg_bytes, arg_str, arg_uint, execute_command},
     common::CmdError,
     resp::{RESPValue, array, array_of, encode, resp_result, try_decode},
     store::{Replica, SharedStore},
@@ -99,6 +99,21 @@ impl Connection {
         }
     }
 
+    fn check_and_clear_watches(&self, store: &SharedStore) -> bool {
+        let mut modification_observed = false;
+        let mut lock = store.lock().unwrap();
+
+        for (_, watchers) in &mut lock.watched_keys {
+            if let Some(modified) = watchers.remove(&self.id)
+                && modified
+            {
+                modification_observed = true;
+            }
+        }
+
+        modification_observed
+    }
+
     pub(crate) async fn dispatch(
         &mut self,
         cmd: String,
@@ -122,6 +137,30 @@ impl Connection {
         }
 
         match cmd.as_str() {
+            "watch" => {
+                if self.in_transaction {
+                    return Err(CmdError::WatchInMulti);
+                }
+
+                let mut lock = store.lock().unwrap();
+                arg(&argv, 1)?; // Assert existence of at least one key argument
+
+                let mut i = 1;
+                while i < argv.len() {
+                    let watchers = lock
+                        .watched_keys
+                        .entry(arg_bytes(&argv, i)?.clone())
+                        .or_default();
+                    watchers.insert(self.id, false);
+                    i += 1;
+                }
+
+                Ok(Some(RESPValue::SimpleString("OK".to_string())))
+            }
+            "unwatch" => {
+                self.check_and_clear_watches(store);
+                Ok(Some(RESPValue::SimpleString("OK".to_string())))
+            }
             "auth" => {
                 let username = arg_bytes(&argv, 1)?;
                 let password = arg_bytes(&argv, 2)?;
@@ -185,17 +224,22 @@ impl Connection {
                 if !self.in_transaction {
                     Err(CmdError::ExecWithoutMulti)
                 } else {
-                    let mut results = vec![];
-                    for (cmd, argv) in &self.cmd_queue {
-                        results.push(resp_result(
-                            execute_command(cmd, argv, store, config, &self.username).await,
-                        ));
-                    }
+                    let results = if self.check_and_clear_watches(store) {
+                        RESPValue::Array(None)
+                    } else {
+                        let mut results = vec![];
+                        for (cmd, argv) in &self.cmd_queue {
+                            results.push(resp_result(
+                                execute_command(cmd, argv, store, config, &self.username).await,
+                            ));
+                        }
+                        array(results)
+                    };
 
                     self.cmd_queue.clear();
                     self.in_transaction = false;
 
-                    Ok(Some(array(results)))
+                    Ok(Some(results))
                 }
             }
             "multi" => {
@@ -210,6 +254,7 @@ impl Connection {
                 if !self.in_transaction {
                     Err(CmdError::DiscardWithoutMulti)
                 } else {
+                    self.check_and_clear_watches(store);
                     self.in_transaction = false;
                     self.cmd_queue.clear();
                     Ok(Some(RESPValue::SimpleString("OK".to_string())))
@@ -272,8 +317,16 @@ impl Connection {
             _ => {
                 let result = execute_command(&cmd, &argv, store, config, &self.username).await?;
                 if is_write_command(&cmd) {
-                    let encoded = encode(&RESPValue::Array(Some(argv.clone())));
                     let mut lock = store.lock().unwrap();
+
+                    let key = arg_bytes(&argv, 1)?;
+                    if let Some(watchers) = lock.watched_keys.get_mut(key) {
+                        watchers
+                            .into_iter()
+                            .for_each(|(_, modified)| *modified = true);
+                    }
+
+                    let encoded = encode(&RESPValue::Array(Some(argv.clone())));
                     lock.master_offset += encoded.len() as u64;
                     for replica in &lock.replicas {
                         replica.sender.send(encoded.clone()).ok();

@@ -69,6 +69,9 @@ pub(crate) enum CmdError {
     #[error("ERR The ID specified in XADD must be greater than 0-0")]
     ZeroStreamId,
 
+    #[error("ERR WATCH inside MULTI is not allowed")]
+    WatchInMulti,
+
     #[error("ERR EXEC without MULTI")]
     ExecWithoutMulti,
 
