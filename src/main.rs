@@ -172,6 +172,32 @@ async fn main() {
         appendfsync: args.appendfsync,
     });
 
+    if !config.dir.exists() {
+        if let Err(e) = fs::create_dir_all(&config.dir) {
+            eprintln!("{e}");
+            exit(1);
+        }
+    }
+
+    if config.appendonly {
+        let path = config.dir.join(&config.appenddirname);
+        let aof_file = config.appendfilename.clone() + ".1.incr.aof";
+
+        if !path.exists()
+            && let Err(e) = fs::create_dir(&path)
+                .and_then(|_| fs::write(path.join(&aof_file), ""))
+                .and_then(|_| {
+                    fs::write(
+                        path.join(config.appendfilename.clone() + ".manifest"),
+                        format!("file {} seq 1 type i", aof_file),
+                    )
+                })
+        {
+            eprintln!("{e}");
+            exit(1);
+        }
+    }
+
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
         .await
         .unwrap();
@@ -207,15 +233,7 @@ async fn main() {
 
         tokio::spawn(handle_master(conn, Arc::clone(&store), Arc::clone(&config)));
     } else {
-        let mut path = PathBuf::from(&config.dir);
-        if !path.exists() {
-            if let Err(e) = fs::create_dir_all(&path) {
-                eprintln!("{e}");
-                exit(1);
-            }
-        }
-
-        path.push(&config.dbfilename);
+        let path = config.dir.join(&config.dbfilename);
 
         if path.exists() {
             let rdb = fs::read(path).unwrap_or_else(|e| {
