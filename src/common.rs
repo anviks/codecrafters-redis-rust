@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use thiserror::Error;
 
 pub(crate) struct Config {
     pub(crate) is_replica: bool,
-    pub(crate) dir: String,
+    pub(crate) dir: PathBuf,
     pub(crate) dbfilename: String,
     pub(crate) appendonly: bool,
     pub(crate) appenddirname: String,

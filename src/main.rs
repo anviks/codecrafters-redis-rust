@@ -9,7 +9,7 @@ use crate::{
 use clap::Parser;
 use std::{
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::exit,
     sync::{Arc, Mutex},
 };
@@ -128,12 +128,15 @@ fn parse_yes_no(s: &str) -> Result<bool, String> {
     }
 }
 
-fn get_cwd() -> String {
-    env::current_dir()
-        .expect("Current dir not accessible")
-        .into_os_string()
-        .into_string()
-        .expect("I do not wish to handle non-UTF-8 paths at the moment")
+fn resolve_path(path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_relative() {
+        std::env::current_dir()
+            .expect("Current dir not accessible")
+            .join(p)
+    } else {
+        p.to_path_buf()
+    }
 }
 
 #[derive(Parser, Clone, Debug)]
@@ -144,8 +147,8 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 
-    #[arg(long)]
-    dir: Option<String>,
+    #[arg(long, default_value = ".")]
+    dir: String,
 
     #[arg(long, default_value = "dump.rdb")]
     dbfilename: String,
@@ -168,7 +171,7 @@ async fn main() {
     let args = Args::parse();
     let config = Arc::new(Config {
         is_replica: args.replicaof.is_some(),
-        dir: args.dir.unwrap_or_else(get_cwd),
+        dir: resolve_path(&args.dir),
         dbfilename: args.dbfilename,
         appendonly: args.appendonly,
         appenddirname: args.appenddirname,

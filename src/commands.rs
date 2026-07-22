@@ -639,7 +639,7 @@ fn cmd_config(arr: &[RESPValue], config: &SharedConfig) -> Result<RESPValue, Cmd
     let key = arg_str(arr, 2)?;
 
     let value = match key.to_lowercase().as_str() {
-        "dir" => &config.dir,
+        "dir" => &config.dir.to_string_lossy().into_owned(),
         "dbfilename" => &config.dbfilename,
         "appendonly" => {
             if config.appendonly {
