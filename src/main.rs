@@ -3,13 +3,13 @@ use crate::{
     common::{Config, SharedConfig},
     connection::Connection,
     rdb::parse_rdb,
-    resp::{RESPValue, array, encode, resp_result},
+    resp::{RESPValue, array, encode, resp_result, try_decode},
     store::{SharedStore, Store},
 };
 use clap::Parser;
 use std::{
-    fs,
-    path::{Path, PathBuf},
+    fs::{self, OpenOptions},
+    path::PathBuf,
     process::exit,
     sync::{Arc, Mutex},
 };
@@ -164,9 +164,10 @@ async fn main() {
     let args = Args::parse();
 
     let dir = resolve_path(&args.dir);
-    let aof_path = dir.join(&args.appenddirname);
+    let aof_dir_path = dir.join(&args.appenddirname);
     let aof_filename = args.appendfilename.clone() + ".1.incr.aof";
-    let appendfilepath = aof_path.join(&aof_filename);
+    let appendfilepath = aof_dir_path.join(&aof_filename);
+    let manifest_filepath = aof_dir_path.join(args.appendfilename.clone() + ".manifest");
 
     let config = Arc::new(Config {
         is_replica: args.replicaof.is_some(),
@@ -186,16 +187,47 @@ async fn main() {
         }
     }
 
+    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
+
     if config.appendonly {
-        if !aof_path.exists()
-            && let Err(e) = fs::create_dir(&aof_path)
-                .and_then(|_| fs::write(&config.appendfilepath, ""))
-                .and_then(|_| {
-                    fs::write(
-                        aof_path.join(config.appendfilename.clone() + ".manifest"),
-                        format!("file {} seq 1 type i", aof_filename),
-                    )
-                })
+        if manifest_filepath.exists() {
+            for line in fs::read_to_string(manifest_filepath).unwrap().split('\n') {
+                if let ["file", filename, "seq", _, "type", "i"] =
+                    line.split(' ').collect::<Vec<&str>>()[..]
+                {
+                    let command_bytes =
+                        fs::read(aof_dir_path.join(filename)).expect("AOF file doesn't exist");
+
+                    let mut offset = 0;
+                    loop {
+                        match try_decode(&command_bytes[offset..]).expect("Corrupted AOF file") {
+                            Some((resp, consumed)) => {
+                                let argv = resp.try_vec().expect("Corrupted AOF file");
+                                let cmd = argv[0].try_str().expect("Corrupted AOF file");
+                                execute_command(&cmd, &argv, &store, &config, &None)
+                                    .await
+                                    .ok();
+                                offset += consumed;
+                            }
+                            None => break,
+                        }
+                    }
+                    break;
+                };
+            }
+        } else if let Err(e) = fs::create_dir_all(&aof_dir_path)
+            .and_then(|_| {
+                OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&config.appendfilepath)
+            })
+            .and_then(|_| {
+                fs::write(
+                    manifest_filepath,
+                    format!("file {} seq 1 type i\n", aof_filename),
+                )
+            })
         {
             eprintln!("{e}");
             exit(1);
@@ -205,8 +237,6 @@ async fn main() {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
         .await
         .unwrap();
-
-    let store: SharedStore = Arc::new(Mutex::new(Store::new()));
 
     let master_addr = args.replicaof.as_ref().map(|s| s.replace(" ", ":"));
     if let Some(addr) = master_addr {
