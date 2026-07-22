@@ -5,6 +5,10 @@ pub(crate) struct Config {
     pub(crate) is_replica: bool,
     pub(crate) dir: String,
     pub(crate) dbfilename: String,
+    pub(crate) appendonly: bool,
+    pub(crate) appenddirname: String,
+    pub(crate) appendfilename: String,
+    pub(crate) appendfsync: String,
 }
 
 pub(crate) type SharedConfig = Arc<Config>;

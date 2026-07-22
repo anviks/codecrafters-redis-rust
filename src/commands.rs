@@ -641,6 +641,16 @@ fn cmd_config(arr: &[RESPValue], config: &SharedConfig) -> Result<RESPValue, Cmd
     let value = match key.to_lowercase().as_str() {
         "dir" => &config.dir,
         "dbfilename" => &config.dbfilename,
+        "appendonly" => {
+            if config.appendonly {
+                "yes"
+            } else {
+                "no"
+            }
+        }
+        "appenddirname" => &config.appenddirname,
+        "appendfilename" => &config.appendfilename,
+        "appendfsync" => &config.appendfsync,
         _ => return Ok(RESPValue::BulkString(None)),
     };
 

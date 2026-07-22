@@ -120,6 +120,14 @@ async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedC
     }
 }
 
+fn parse_yes_no(s: &str) -> Result<bool, String> {
+    match s.to_lowercase().as_str() {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(format!("expected 'yes' or 'no', got '{s}'")),
+    }
+}
+
 #[derive(Parser, Clone, Debug)]
 struct Args {
     #[arg(long, default_value_t = 6379)]
@@ -128,11 +136,23 @@ struct Args {
     #[arg(long)]
     replicaof: Option<String>,
 
-    #[arg(long, default_value_t = String::from("."))]
+    #[arg(long, default_value = ".")]
     dir: String,
 
-    #[arg(long, default_value_t = String::from("dump.rdb"))]
+    #[arg(long, default_value = "dump.rdb")]
     dbfilename: String,
+
+    #[arg(long, default_value = "no", value_parser = parse_yes_no)]
+    appendonly: bool,
+
+    #[arg(long, default_value = "appendonlydir")]
+    appenddirname: String,
+
+    #[arg(long, default_value = "appendonly.aof")]
+    appendfilename: String,
+
+    #[arg(long, default_value = "everysec")]
+    appendfsync: String,
 }
 
 #[tokio::main]
@@ -142,6 +162,10 @@ async fn main() {
         is_replica: args.replicaof.is_some(),
         dir: args.dir,
         dbfilename: args.dbfilename,
+        appendonly: args.appendonly,
+        appenddirname: args.appenddirname,
+        appendfilename: args.appendfilename,
+        appendfsync: args.appendfsync,
     });
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port))
