@@ -5,6 +5,7 @@ use crate::{
     resp::{RESPValue, array, array_of, encode, resp_result, try_decode},
     store::{Replica, SharedStore},
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fs,
@@ -34,6 +35,7 @@ pub(crate) struct Connection {
     in_transaction: bool,
     pub(crate) subscribed_channels: HashSet<Vec<u8>>,
     pub(crate) subscription_sender: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    pub(crate) username: Option<Vec<u8>>,
 }
 
 impl Connection {
@@ -46,6 +48,7 @@ impl Connection {
             in_transaction: false,
             subscribed_channels: HashSet::new(),
             subscription_sender: None,
+            username: None,
         }
     }
 
@@ -119,6 +122,21 @@ impl Connection {
         }
 
         match cmd.as_str() {
+            "auth" => {
+                let username = arg_bytes(&argv, 1)?;
+                let password = arg_bytes(&argv, 2)?;
+
+                let lock = store.lock().unwrap();
+                if let Some(passwords) = lock.users.get(username)
+                    && (passwords.is_empty()
+                        || passwords.contains(&Sha256::digest(password).into()))
+                {
+                    self.username = Some(username.clone());
+                    Ok(Some(RESPValue::SimpleString("OK".to_string())))
+                } else {
+                    Err(CmdError::WrongPass)
+                }
+            }
             "ping" => {
                 if in_sub_mode {
                     Ok(Some(array(vec!["pong", ""])))
@@ -169,7 +187,9 @@ impl Connection {
                 } else {
                     let mut results = vec![];
                     for (cmd, argv) in &self.cmd_queue {
-                        results.push(resp_result(execute_command(cmd, argv, store, config).await));
+                        results.push(resp_result(
+                            execute_command(cmd, argv, store, config, &self.username).await,
+                        ));
                     }
 
                     self.cmd_queue.clear();
@@ -250,7 +270,7 @@ impl Connection {
                 Ok(Some(RESPValue::SimpleString("QUEUED".to_string())))
             }
             _ => {
-                let result = execute_command(&cmd, &argv, store, config).await;
+                let result = execute_command(&cmd, &argv, store, config, &self.username).await;
                 if is_write_command(&cmd) {
                     let encoded = encode(&RESPValue::Array(Some(argv.clone())));
                     let mut store = store.lock().unwrap();

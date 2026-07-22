@@ -34,6 +34,12 @@ impl OrderedF64 {
 
 #[derive(Error, Debug)]
 pub(crate) enum CmdError {
+    #[error("NOAUTH Authentication required")]
+    AuthRequired,
+
+    #[error("WRONGPASS invalid username-password pair or user is disabled.")]
+    WrongPass,
+
     #[error("ERR invalid longitude,latitude pair {longitude},{latitude}")]
     InvalidCoords { longitude: f64, latitude: f64 },
 

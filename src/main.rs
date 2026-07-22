@@ -110,7 +110,9 @@ async fn handle_master(mut conn: Connection, store: SharedStore, config: SharedC
                 let reply = array(vec!["REPLCONF", "ACK", offset.to_string().as_str()]);
                 conn.stream.write_all(&encode(&reply)).await.ok();
             } else {
-                execute_command(&cmd, &argv, &store, &config).await.ok();
+                execute_command(&cmd, &argv, &store, &config, &None)
+                    .await
+                    .ok();
             }
         };
 
@@ -201,11 +203,14 @@ async fn main() {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let conn_id = store.lock().unwrap().get_next_connection_id();
-                tokio::spawn(handle_client(
-                    Connection::new(stream, conn_id),
-                    Arc::clone(&store),
-                    Arc::clone(&config),
-                ));
+                let mut conn = Connection::new(stream, conn_id);
+                let lock = store.lock().unwrap();
+                if let Some(passwords) = lock.users.get(&b"default".to_vec())
+                    && passwords.is_empty()
+                {
+                    conn.username = Some(b"default".to_vec());
+                }
+                tokio::spawn(handle_client(conn, Arc::clone(&store), Arc::clone(&config)));
             }
             Err(e) => {
                 println!("error: {}", e);

@@ -902,9 +902,16 @@ fn cmd_geosearch(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cm
     Ok(array(locations))
 }
 
-fn cmd_acl(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+fn cmd_acl(
+    arr: &[RESPValue],
+    store: &SharedStore,
+    username: &Option<Vec<u8>>,
+) -> Result<RESPValue, CmdError> {
     match arg_str(arr, 1)?.to_lowercase().as_str() {
-        "whoami" => Ok("default".into()),
+        "whoami" => match username {
+            Some(name) => Ok(name.clone().into()),
+            None => Err(CmdError::AuthRequired),
+        },
         "getuser" => {
             let name = arg_bytes(arr, 2)?;
             let lock = store.lock().unwrap();
@@ -914,7 +921,7 @@ fn cmd_acl(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
             };
 
             let mut flags = vec![];
-            if passwords.len() == 0 {
+            if passwords.is_empty() {
                 flags.push("nopass");
             }
 
@@ -938,9 +945,7 @@ fn cmd_acl(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
             if let Ok(pass) = arg_bytes(arr, 3)
                 && pass[0] == b'>'
             {
-                let mut hash = Sha256::new();
-                hash.update(pass);
-                passwords.push(hash.finalize().into());
+                passwords.push(Sha256::digest(&pass[1..]).into());
             }
 
             Ok(RESPValue::SimpleString("OK".to_string()))
@@ -954,6 +959,7 @@ pub(crate) async fn execute_command(
     arr: &[RESPValue],
     store: &SharedStore,
     config: &SharedConfig,
+    username: &Option<Vec<u8>>,
 ) -> Result<RESPValue, CmdError> {
     match command {
         "echo" if arr.len() > 1 => Ok(arr[1].clone()),
@@ -986,7 +992,7 @@ pub(crate) async fn execute_command(
         "geopos" => cmd_geopos(&arr, &store),
         "geodist" => cmd_geodist(&arr, &store),
         "geosearch" => cmd_geosearch(&arr, &store),
-        "acl" => cmd_acl(&arr, &store),
+        "acl" => cmd_acl(&arr, &store, username),
         _ => Err(CmdError::Unknown),
     }
 }
