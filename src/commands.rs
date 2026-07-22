@@ -2,7 +2,7 @@ use crate::{
     SharedConfig,
     common::CmdError,
     coordinates::{are_valid_coords, decode_coords, encode_coords, geohash_get_distance},
-    resp::{RESPValue, array, array_of, encode},
+    resp::{RESPValue, array, array_of, encode, resp_ok},
     store::{Data, SharedStore, SortedSet, Store, Value},
     stream::{Stream, StreamEntry, StreamId},
 };
@@ -202,7 +202,7 @@ fn cmd_set(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError
     };
 
     store.lock().unwrap().entries.insert(key.clone(), value);
-    Ok(RESPValue::SimpleString("OK".to_string()))
+    Ok(resp_ok())
 }
 
 fn cmd_rpush(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
@@ -948,7 +948,7 @@ fn cmd_acl(
                 passwords.push(Sha256::digest(&pass[1..]).into());
             }
 
-            Ok(RESPValue::SimpleString("OK".to_string()))
+            Ok(resp_ok())
         }
         _ => Err(CmdError::Syntax),
     }
@@ -977,7 +977,7 @@ pub(crate) async fn execute_command(
         "xread" => cmd_xread(&arr, &store).await,
         "incr" => cmd_incr(&arr, &store),
         "info" => cmd_info(&arr, &config),
-        "replconf" => Ok(RESPValue::SimpleString("OK".to_string())),
+        "replconf" => Ok(resp_ok()),
         "wait" => cmd_wait(&arr, &store).await,
         "config" => cmd_config(&arr, &config),
         "keys" => cmd_keys(&store),

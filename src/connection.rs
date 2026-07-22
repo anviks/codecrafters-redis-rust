@@ -2,7 +2,7 @@ use crate::{
     SharedConfig,
     commands::{arg, arg_bytes, arg_str, arg_uint, execute_command},
     common::CmdError,
-    resp::{RESPValue, array, array_of, encode, resp_result, try_decode},
+    resp::{RESPValue, array, array_of, encode, resp_ok, resp_result, try_decode},
     store::{Replica, SharedStore},
 };
 use sha2::{Digest, Sha256};
@@ -155,11 +155,11 @@ impl Connection {
                     i += 1;
                 }
 
-                Ok(Some(RESPValue::SimpleString("OK".to_string())))
+                Ok(Some(resp_ok()))
             }
             "unwatch" => {
                 self.check_and_clear_watches(store);
-                Ok(Some(RESPValue::SimpleString("OK".to_string())))
+                Ok(Some(resp_ok()))
             }
             "auth" => {
                 let username = arg_bytes(&argv, 1)?;
@@ -171,7 +171,7 @@ impl Connection {
                         || passwords.contains(&Sha256::digest(password).into()))
                 {
                     self.username = Some(username.clone());
-                    Ok(Some(RESPValue::SimpleString("OK".to_string())))
+                    Ok(Some(resp_ok()))
                 } else {
                     Err(CmdError::WrongPass)
                 }
@@ -247,7 +247,7 @@ impl Connection {
                     Err(CmdError::NestedMulti)
                 } else {
                     self.in_transaction = true;
-                    Ok(Some(RESPValue::SimpleString("OK".to_string())))
+                    Ok(Some(resp_ok()))
                 }
             }
             "discard" => {
@@ -257,7 +257,7 @@ impl Connection {
                     self.check_and_clear_watches(store);
                     self.in_transaction = false;
                     self.cmd_queue.clear();
-                    Ok(Some(RESPValue::SimpleString("OK".to_string())))
+                    Ok(Some(resp_ok()))
                 }
             }
             "psync" => {

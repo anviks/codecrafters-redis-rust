@@ -89,6 +89,10 @@ pub(crate) fn resp_result(result: Result<RESPValue, CmdError>) -> RESPValue {
     }
 }
 
+pub(crate) fn resp_ok() -> RESPValue {
+    RESPValue::SimpleString("OK".to_string())
+}
+
 impl RESPValue {
     pub(crate) fn as_vec(&self) -> Option<&Vec<RESPValue>> {
         match self {
