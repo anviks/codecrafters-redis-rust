@@ -8,7 +8,7 @@ use crate::{
 };
 use clap::Parser;
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     process::exit,
     sync::{Arc, Mutex},
@@ -153,7 +153,7 @@ struct Args {
     #[arg(long, default_value = "dump.rdb")]
     dbfilename: String,
 
-    #[arg(long, default_value = "no", value_parser = parse_yes_no)]
+    #[arg(long, default_value = "no", action = clap::ArgAction::Set, value_parser = parse_yes_no)]
     appendonly: bool,
 
     #[arg(long, default_value = "appendonlydir")]
