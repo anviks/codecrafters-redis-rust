@@ -129,14 +129,7 @@ fn parse_yes_no(s: &str) -> Result<bool, String> {
 }
 
 fn resolve_path(path: &str) -> PathBuf {
-    let p = Path::new(path);
-    if p.is_relative() {
-        std::env::current_dir()
-            .expect("Current dir not accessible")
-            .join(p)
-    } else {
-        p.to_path_buf()
-    }
+    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
 }
 
 #[derive(Parser, Clone, Debug)]
