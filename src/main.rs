@@ -202,11 +202,11 @@ async fn main() {
                     loop {
                         match try_decode(&command_bytes[offset..]).expect("Corrupted AOF file") {
                             Some((resp, consumed)) => {
-                                let argv = resp.try_vec().expect("Corrupted AOF file");
-                                let cmd = argv[0].try_str().expect("Corrupted AOF file");
-                                execute_command(&cmd, &argv, &store, &config, &None)
-                                    .await
-                                    .ok();
+                                if let Some((cmd, argv)) = parse_command(resp) {
+                                    execute_command(&cmd, &argv, &store, &config, &None)
+                                        .await
+                                        .ok();
+                                }
                                 offset += consumed;
                             }
                             None => break,
