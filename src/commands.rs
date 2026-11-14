@@ -1015,6 +1015,19 @@ fn cmd_strlen(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     Ok(RESPValue::Integer(length as i64))
 }
 
+fn cmd_bitcount(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+
+    let lock = store.lock().unwrap();
+    let bytes = match lock.entries.get(key) {
+        Some(val) => val.data.try_bytes()?,
+        None => &vec![],
+    };
+    let bitcount: u32 = bytes.iter().map(|n| n.count_ones()).sum();
+
+    Ok(RESPValue::Integer(bitcount as i64))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -1057,6 +1070,7 @@ pub(crate) async fn execute_command(
         "setbit" => cmd_setbit(&arr, &store),
         "getbit" => cmd_getbit(&arr, &store),
         "strlen" => cmd_strlen(&arr, &store),
+        "bitcount" => cmd_bitcount(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
