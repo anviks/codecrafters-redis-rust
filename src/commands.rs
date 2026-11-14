@@ -1003,6 +1003,18 @@ fn cmd_getbit(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
     Ok(RESPValue::Integer(bit as i64))
 }
 
+fn cmd_strlen(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+
+    let lock = store.lock().unwrap();
+    let length = match lock.entries.get(key) {
+        Some(val) => val.data.try_bytes()?.len(),
+        None => 0,
+    };
+
+    Ok(RESPValue::Integer(length as i64))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -1044,6 +1056,7 @@ pub(crate) async fn execute_command(
         "acl" => cmd_acl(&arr, &store, username),
         "setbit" => cmd_setbit(&arr, &store),
         "getbit" => cmd_getbit(&arr, &store),
+        "strlen" => cmd_strlen(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
