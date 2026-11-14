@@ -9,7 +9,6 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
-    io::Read,
     sync::atomic::Ordering,
     time::{Duration, SystemTime},
 };
@@ -1040,6 +1039,12 @@ fn cmd_bitcount(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cmd
     };
 }
 
+fn bytes_to_u64(bytes: &Vec<u8>) -> Result<u64, CmdError> {
+    let mut buf = [0u8; 8];
+    buf[..bytes.len()].copy_from_slice(bytes);
+    Ok(u64::from_le_bytes(buf))
+}
+
 fn cmd_bitop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
     let op = arg_str(arr, 1)?;
     let dest = arg_bytes(arr, 2)?;
@@ -1055,12 +1060,9 @@ fn cmd_bitop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
         Some(val) => val.data.try_bytes()?,
         None => &vec![0],
     };
-    let mut buf1 = [0u8; 8];
-    let mut buf2 = [0u8; 8];
-    buf1[..bytes1.len()].copy_from_slice(bytes1);
-    buf2[..bytes2.len()].copy_from_slice(bytes2);
-    let n1 = u64::from_le_bytes(buf1);
-    let n2 = u64::from_le_bytes(buf2);
+
+    let n1 = bytes_to_u64(bytes1)?;
+    let n2 = bytes_to_u64(bytes2)?;
 
     let op_result = if op.to_uppercase() == "AND" {
         n1 & n2
@@ -1069,8 +1071,10 @@ fn cmd_bitop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdErr
     } else {
         unimplemented!()
     };
+
     let result_len = bytes1.len().max(bytes2.len());
     let result = &(op_result).to_le_bytes()[..result_len];
+
     lock.entries.insert(
         dest.clone(),
         Value {
