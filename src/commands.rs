@@ -1021,7 +1021,7 @@ fn cmd_bitcount(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cmd
     let lock = store.lock().unwrap();
     let bytes = match lock.entries.get(key) {
         Some(val) => val.data.try_bytes()?,
-        None => &vec![],
+        None => &vec![0],
     };
 
     let start = arg_uint(arr, 2).map(|n| n as usize).unwrap_or(0);
