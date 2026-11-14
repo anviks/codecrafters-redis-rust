@@ -9,6 +9,7 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
+    io::Read,
     sync::atomic::Ordering,
     time::{Duration, SystemTime},
 };
@@ -1039,6 +1040,48 @@ fn cmd_bitcount(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cmd
     };
 }
 
+fn cmd_bitop(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let op = arg_str(arr, 1)?;
+    let dest = arg_bytes(arr, 2)?;
+    let key1 = arg_bytes(arr, 3)?;
+    let key2 = arg_bytes(arr, 4)?;
+
+    let mut lock = store.lock().unwrap();
+    let bytes1 = match lock.entries.get(key1) {
+        Some(val) => val.data.try_bytes()?,
+        None => &vec![0],
+    };
+    let bytes2 = match lock.entries.get(key2) {
+        Some(val) => val.data.try_bytes()?,
+        None => &vec![0],
+    };
+    let mut buf1 = [0u8; 8];
+    let mut buf2 = [0u8; 8];
+    buf1[..bytes1.len()].copy_from_slice(bytes1);
+    buf2[..bytes2.len()].copy_from_slice(bytes2);
+    let n1 = u64::from_le_bytes(buf1);
+    let n2 = u64::from_le_bytes(buf2);
+
+    let op_result = if op.to_uppercase() == "AND" {
+        n1 & n2
+    } else if op.to_uppercase() == "OR" {
+        n1 | n2
+    } else {
+        unimplemented!()
+    };
+    let result_len = bytes1.len().max(bytes2.len());
+    let result = &(op_result).to_le_bytes()[..result_len];
+    lock.entries.insert(
+        dest.clone(),
+        Value {
+            data: Data::String(result.to_vec()),
+            expires_at: None,
+        },
+    );
+
+    Ok(RESPValue::Integer(result_len as i64))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -1082,6 +1125,7 @@ pub(crate) async fn execute_command(
         "getbit" => cmd_getbit(&arr, &store),
         "strlen" => cmd_strlen(&arr, &store),
         "bitcount" => cmd_bitcount(&arr, &store),
+        "bitop" => cmd_bitop(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }
