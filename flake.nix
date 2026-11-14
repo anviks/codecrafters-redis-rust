@@ -14,6 +14,8 @@
           rust-analyzer
           clippy
           rustfmt
+          codecrafters-cli
+          redis
         ];
         RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
       };

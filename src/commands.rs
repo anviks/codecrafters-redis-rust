@@ -11,7 +11,6 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::atomic::Ordering,
     time::{Duration, SystemTime},
-    u64,
 };
 use tokio::sync::oneshot;
 
@@ -964,6 +963,43 @@ fn cmd_acl(
     }
 }
 
+fn cmd_setbit(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let offset = arg_uint(arr, 2)? as usize;
+    let new_bit = arg_uint(arr, 3)? as u8;
+
+    let mut lock = store.lock().unwrap();
+    let val = lock.entries.entry(key.clone()).or_insert(Value {
+        data: Data::String(vec![0; (offset / 8) + 1]),
+        expires_at: None,
+    });
+    let b = val.data.try_bytes_mut()?;
+    let current_byte = b[offset / 8];
+    let current_bit = (current_byte >> (7 - offset % 8)) & 1;
+    let new_byte = if new_bit == 0 {
+        current_byte & !(1 << (7 - offset % 8))
+    } else {
+        current_byte | 1 << (7 - offset % 8)
+    };
+    b[offset / 8] = new_byte;
+
+    Ok(RESPValue::Integer(current_bit as i64))
+}
+
+fn cmd_getbit(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdError> {
+    let key = arg_bytes(arr, 1)?;
+    let offset = arg_uint(arr, 2)? as usize;
+
+    let lock = store.lock().unwrap();
+    let byte = match lock.entries.get(key) {
+        Some(val) => val.data.try_bytes()?[offset / 8],
+        None => 0,
+    };
+    let bit = (byte >> (7 - offset % 8)) & 1;
+
+    Ok(RESPValue::Integer(bit as i64))
+}
+
 pub(crate) async fn execute_command(
     command: &str,
     arr: &[RESPValue],
@@ -1003,6 +1039,8 @@ pub(crate) async fn execute_command(
         "geodist" => cmd_geodist(&arr, &store),
         "geosearch" => cmd_geosearch(&arr, &store),
         "acl" => cmd_acl(&arr, &store, username),
+        "setbit" => cmd_setbit(&arr, &store),
+        "getbit" => cmd_getbit(&arr, &store),
         _ => Err(CmdError::Unknown),
     }
 }

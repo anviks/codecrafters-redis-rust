@@ -92,6 +92,20 @@ impl Data {
         }
     }
 
+    pub(crate) fn as_bytes(&self) -> Option<&Vec<u8>> {
+        match self {
+            Data::String(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_bytes_mut(&mut self) -> Option<&mut Vec<u8>> {
+        match self {
+            Data::String(b) => Some(b),
+            _ => None,
+        }
+    }
+
     pub(crate) fn as_vec(&self) -> Option<&VecDeque<Vec<u8>>> {
         match self {
             Data::List(vec) => Some(vec),
@@ -136,6 +150,14 @@ impl Data {
 
     pub(crate) fn try_str(&self) -> Result<&str, CmdError> {
         self.as_str().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_bytes(&self) -> Result<&Vec<u8>, CmdError> {
+        self.as_bytes().ok_or(CmdError::WrongType)
+    }
+
+    pub(crate) fn try_bytes_mut(&mut self) -> Result<&mut Vec<u8>, CmdError> {
+        self.as_bytes_mut().ok_or(CmdError::WrongType)
     }
 
     pub(crate) fn try_vec(&self) -> Result<&VecDeque<Vec<u8>>, CmdError> {
