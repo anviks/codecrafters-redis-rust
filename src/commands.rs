@@ -974,6 +974,9 @@ fn cmd_setbit(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
         expires_at: None,
     });
     let b = val.data.try_bytes_mut()?;
+    if offset / 8 >= b.len() {
+        b.extend_from_slice(&vec![0; (offset / 8 - b.len()) + 1]);
+    }
     let current_byte = b[offset / 8];
     let current_bit = (current_byte >> (7 - offset % 8)) & 1;
     let new_byte = if new_bit == 0 {
@@ -992,7 +995,7 @@ fn cmd_getbit(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, CmdEr
 
     let lock = store.lock().unwrap();
     let byte = match lock.entries.get(key) {
-        Some(val) => val.data.try_bytes()?[offset / 8],
+        Some(val) => val.data.try_bytes()?.get(offset / 8).cloned().unwrap_or(0),
         None => 0,
     };
     let bit = (byte >> (7 - offset % 8)) & 1;
