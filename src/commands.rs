@@ -1023,9 +1023,20 @@ fn cmd_bitcount(arr: &[RESPValue], store: &SharedStore) -> Result<RESPValue, Cmd
         Some(val) => val.data.try_bytes()?,
         None => &vec![],
     };
-    let bitcount: u32 = bytes.iter().map(|n| n.count_ones()).sum();
 
-    Ok(RESPValue::Integer(bitcount as i64))
+    let start = arg_uint(arr, 2).map(|n| n as usize).unwrap_or(0);
+    let end = arg_uint(arr, 3)
+        .map(|n| n as usize)
+        .unwrap_or(usize::MAX)
+        .min(bytes.len() - 1);
+
+    // Due to min() above, this covers start >= len case as well
+    return if start > end {
+        Ok(RESPValue::Integer(0))
+    } else {
+        let bitcount: u32 = bytes[start..=end].iter().map(|n| n.count_ones()).sum();
+        Ok(RESPValue::Integer(bitcount as i64))
+    };
 }
 
 pub(crate) async fn execute_command(
